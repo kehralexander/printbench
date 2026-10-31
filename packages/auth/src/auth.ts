@@ -5,6 +5,7 @@ import { APIError, createAuthMiddleware, getSessionFromCtx } from 'better-auth/a
 import { hashPassword, verifyPassword } from 'better-auth/crypto'
 import { drizzleAdapter } from 'better-auth/adapters/drizzle'
 import { admin } from 'better-auth/plugins/admin'
+import { genericOAuth } from 'better-auth/plugins/generic-oauth'
 import { nextCookies } from 'better-auth/next-js'
 import { recordAudit } from '@pb/core'
 import { getDb, schema, type Database } from '@pb/db'
@@ -65,6 +66,43 @@ function trustedOrigins(): string[] {
       .map((origin) => origin.trim().replace(/\/+$/, ''))
       .filter(Boolean),
   ].filter((origin): origin is string => Boolean(origin))
+}
+
+/** Provider id of the optional OIDC login; also the callback path segment. */
+export const OIDC_PROVIDER_ID = 'oidc'
+
+type OidcConfig = {
+  issuer: string
+  clientId: string
+  clientSecret: string
+  name: string
+  allowSignUp: boolean
+}
+
+/**
+ * Optional single sign-on through any OpenID Connect provider, enabled when
+ * OIDC_ISSUER, OIDC_CLIENT_ID and OIDC_CLIENT_SECRET are all set. The provider
+ * must redirect to `<BETTER_AUTH_URL>/api/auth/callback/oidc`.
+ */
+function oidcConfig(): OidcConfig | undefined {
+  const issuer = process.env.OIDC_ISSUER?.trim().replace(/\/+$/, '')
+  const clientId = process.env.OIDC_CLIENT_ID?.trim()
+  const clientSecret = process.env.OIDC_CLIENT_SECRET?.trim()
+  if (!issuer || !clientId || !clientSecret) return undefined
+  return {
+    issuer,
+    clientId,
+    clientSecret,
+    name: process.env.OIDC_NAME?.trim() || 'SSO',
+    // Invite-only by default, like password accounts. When enabled, unknown
+    // users are created as viewers on their first SSO sign-in.
+    allowSignUp: process.env.OIDC_ALLOW_SIGNUP?.trim().toLowerCase() === 'true',
+  }
+}
+
+/** Display name of the configured SSO provider, or null when SSO is off. */
+export function ssoProviderName(): string | null {
+  return oidcConfig()?.name ?? null
 }
 
 /** Builds the same auth instance against an explicit pool for isolated tests. */
@@ -160,6 +198,7 @@ export function createAuth(database: Database): ReturnType<typeof buildNativeAut
 
 function buildNativeAuth(database: Database) {
   const baseURL = configuredBaseUrl()
+  const oidc = oidcConfig()
   return betterAuth({
     appName: 'PrintBench',
     baseURL,
@@ -183,6 +222,15 @@ function buildNativeAuth(database: Database) {
       requireEmailVerification: false,
       minPasswordLength: PASSWORD_MIN_LENGTH,
       maxPasswordLength: PASSWORD_MAX_LENGTH,
+    },
+
+    account: {
+      accountLinking: {
+        // An SSO sign-in attaches to the existing account with the same email.
+        // Every local account is created with a verified email (setup, invite,
+        // admin), and the operator controls the provider, so it is trusted.
+        trustedProviders: oidc ? [OIDC_PROVIDER_ID] : [],
+      },
     },
 
     user: {
@@ -244,14 +292,27 @@ function buildNativeAuth(database: Database) {
         })
       }),
       after: createAuthMiddleware(async (ctx) => {
-        if (ctx.path !== '/sign-in/email') return
+        const sso = ctx.path === '/callback/:id' && ctx.params?.id === OIDC_PROVIDER_ID
+        if (ctx.path !== '/sign-in/email' && !sso) return
         const created = ctx.context.newSession
         if (created) {
           await recordAudit(database, {
             action: 'auth.login',
             actor: { type: 'user', id: created.user.id, name: created.user.name },
+            ...(sso && { detail: { method: 'sso' } }),
             // The header first: the session stores IPv6 addresses masked to a prefix.
             ip: clientIp(ctx.headers) ?? created.session.ipAddress,
+          })
+          return
+        }
+
+        if (sso) {
+          await recordAudit(database, {
+            action: 'auth.login_failed',
+            outcome: 'failure',
+            actor: { type: 'anonymous', name: '(sso)' },
+            detail: { reason: 'SSO sign-in was refused', method: 'sso' },
+            ip: clientIp(ctx.headers),
           })
           return
         }
@@ -272,6 +333,27 @@ function buildNativeAuth(database: Database) {
 
     plugins: [
       admin({ defaultRole: 'viewer', adminRoles: [ROLES.admin] }),
+      ...(oidc
+        ? [
+            genericOAuth({
+              config: [
+                {
+                  providerId: OIDC_PROVIDER_ID,
+                  name: oidc.name,
+                  discoveryUrl: `${oidc.issuer}/.well-known/openid-configuration`,
+                  requireIdTokenVerification: true,
+                  clientId: oidc.clientId,
+                  clientSecret: oidc.clientSecret,
+                  scopes: ['openid', 'email', 'profile'],
+                  pkce: true,
+                  disableSignUp: !oidc.allowSignUp,
+                  // Signing out of PrintBench should not end the provider session.
+                  disableProviderLogout: true,
+                },
+              ],
+            }),
+          ]
+        : []),
       // Must be last: lets server actions set cookies.
       nextCookies(),
     ],

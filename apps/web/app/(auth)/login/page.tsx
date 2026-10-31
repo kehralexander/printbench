@@ -1,15 +1,32 @@
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
-import { getSessionUser } from '@pb/auth'
+import { getSessionUser, OIDC_PROVIDER_ID, ssoProviderName } from '@pb/auth'
 import { needsFirstRunSetup } from '@/lib/setup'
 import { LoginForm } from './login-form'
+import { SsoButton } from './sso-button'
 
 export const dynamic = 'force-dynamic'
 
-export default async function LoginPage() {
+/** Error codes better-auth appends when an SSO callback is refused. */
+function ssoErrorMessage(code: string | undefined, provider: string): string | null {
+  if (!code) return null
+  if (code === 'signup_disabled') {
+    return `Your ${provider} account has no PrintBench account yet. Ask an admin to invite you.`
+  }
+  return `Signing in with ${provider} did not work (${code}).`
+}
+
+export default async function LoginPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ error?: string }>
+}) {
   // A brand-new instance has no account to sign in to; send them to setup.
   if (await needsFirstRunSetup()) redirect('/setup')
   if (await getSessionUser()) redirect('/')
+
+  const sso = ssoProviderName()
+  const ssoError = sso ? ssoErrorMessage((await searchParams).error, sso) : null
 
   return (
     <>
@@ -19,6 +36,16 @@ export default async function LoginPage() {
           Sign in to browse your print library.
         </p>
       </div>
+      {sso && (
+        <div className="mb-6 space-y-2">
+          <SsoButton providerId={OIDC_PROVIDER_ID} name={sso} />
+          {ssoError && (
+            <p role="alert" className="text-sm text-[var(--color-danger)]">
+              {ssoError}
+            </p>
+          )}
+        </div>
+      )}
       <LoginForm />
       <p className="mt-4 text-sm">
         <Link href="/forgot-password" className="text-[var(--color-accent)] hover:underline">

@@ -1,4 +1,11 @@
-export { getAuth, type Auth, type Session, type AuthUser } from './auth'
+export {
+  getAuth,
+  ssoProviderName,
+  OIDC_PROVIDER_ID,
+  type Auth,
+  type Session,
+  type AuthUser,
+} from './auth'
 export {
   issuePasswordReset,
   validatePasswordReset,
