@@ -397,6 +397,8 @@ export interface PrinterSnapshot {
   status: PrinterStatus | null
   /** Whether that reading is recent enough to act on. */
   fresh: boolean
+  /** Seconds since that reading, by the database's clock; null before the first. */
+  ageSec: number | null
 }
 
 /** Every printer with the worker's last reading of it — no network, so always fast. */
@@ -406,14 +408,17 @@ export async function printerSnapshots(db: Database): Promise<PrinterSnapshot[]>
     name: string
     status: PrinterStatus | null
     fresh: boolean | null
+    age_sec: number | null
   }>(sql`
-    SELECT id, name, status, (status_at > now() - interval '2 minutes') AS fresh
+    SELECT id, name, status, (status_at > now() - interval '2 minutes') AS fresh,
+           extract(epoch FROM now() - status_at)::float AS age_sec
     FROM print_hosts ORDER BY name`)
   return rows.rows.map((row) => ({
     id: row.id,
     name: row.name,
     status: row.status,
     fresh: row.fresh === true,
+    ageSec: row.age_sec,
   }))
 }
 

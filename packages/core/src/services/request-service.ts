@@ -124,6 +124,10 @@ export interface LivePrint {
   /** Null when the printer's last status is too old to trust. */
   progress: number | null
   remainingMin: number | null
+  /** Seconds since the printer was read, by the database's clock; null when not live. */
+  ageSec: number | null
+  /** Paused on the printer, so nothing should count down. */
+  paused: boolean
 }
 
 /** A printer status older than this is not "live" any more. */
@@ -760,6 +764,8 @@ type Row = {
   live_printer: string | null
   live_progress: number | null
   live_remaining_sec: number | null
+  live_age_sec: number | null
+  live_paused: boolean | null
   position: number | null
   share_token: string | null
   due_at: string | null
@@ -783,11 +789,13 @@ const SELECT_REQUEST = sql`
          r.prints_done, r.position, r.share_token, lh.name AS live_printer,
          CASE WHEN lh.fresh THEN (lh.status->>'progress')::float END AS live_progress,
          CASE WHEN lh.fresh THEN (lh.status->>'remainingSec')::float END AS live_remaining_sec,
+         CASE WHEN lh.fresh THEN extract(epoch FROM now() - lh.status_at)::float END AS live_age_sec,
+         (lh.status->>'state') = 'paused' AS live_paused,
          r.created_by, u.name AS created_by_name, r.created_at
   FROM print_requests r
   LEFT JOIN printer_jobs pj ON pj.id = r.printer_job_id AND pj.finished_at IS NULL
   LEFT JOIN LATERAL (
-    SELECT h.name, h.status,
+    SELECT h.name, h.status, h.status_at,
            (h.status_at > now() - ${LIVE_STATUS_MAX_AGE} AND (h.status->>'busy')::boolean) AS fresh
     FROM print_hosts h WHERE h.id = pj.host_id
   ) lh ON true
@@ -825,6 +833,8 @@ function toRequest(row: Row): PrintRequest {
           printerName: row.live_printer,
           progress: row.live_progress,
           remainingMin: row.live_remaining_sec != null ? row.live_remaining_sec / 60 : null,
+          ageSec: row.live_age_sec,
+          paused: row.live_paused === true,
         }
       : null,
     position: row.position,

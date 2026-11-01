@@ -323,9 +323,16 @@ describe('printer tracking', { tags: ['integration'] }, () => {
     const { id } = await request()
     await trackPrinter(db, printer, printing('benchy_plate.gcode', 0.25, 20, 60))
     const [row] = (await listRequests(db, { status: ['printing'] })).filter((r) => r.id === id)
-    expect(row?.live).toEqual({ printerName: 'Kobra X', progress: 0.25, remainingMin: 60 })
+    expect(row?.live).toEqual({
+      printerName: 'Kobra X',
+      progress: 0.25,
+      remainingMin: 60,
+      ageSec: expect.any(Number),
+      paused: false,
+    })
     const [snapshot] = (await printerSnapshots(db)).filter((p) => p.id === HOST)
     expect(snapshot).toMatchObject({ fresh: true, status: { state: 'printing', progress: 0.25 } })
+    expect(snapshot!.ageSec).toBeGreaterThanOrEqual(0)
   })
 
   it('files a job the library did not know under a model later, with its history', async () => {

@@ -5,6 +5,7 @@ import { getDb } from '@pb/db'
 import { AutoRefresh } from '@/components/ui/auto-refresh'
 import { Card } from '@/components/ui/card'
 import { ClockTime } from '@/components/ui/clock-time'
+import { LiveProgressBar } from '@/components/printer/live-progress'
 
 export const dynamic = 'force-dynamic'
 
@@ -43,7 +44,6 @@ export default async function RequestStatusPage({
   const { request, ahead, readyInMin } = progress
   const left = Math.max(1, request.quantity - request.printsDone)
   const readyAt = readyInMin != null ? readyTime(readyInMin) : null
-  const percent = request.live?.progress != null ? Math.round(request.live.progress * 100) : null
 
   return (
     <main className="mx-auto max-w-md px-5 py-10">
@@ -91,25 +91,16 @@ export default async function RequestStatusPage({
               icon={<Printer />}
               text={request.live ? `Printing on ${request.live.printerName}` : 'On the printer'}
             />
-            {percent != null && (
-              <div className="flex items-center gap-3">
-                <div
-                  role="progressbar"
-                  aria-label="Progress"
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                  aria-valuenow={percent}
-                  className="h-2 flex-1 overflow-hidden rounded-full bg-[var(--color-surface-2)]"
-                >
-                  <div
-                    className="h-full rounded-full bg-[var(--color-accent)]"
-                    style={{ width: `${percent}%` }}
-                  />
-                </div>
-                <span className="w-12 text-right text-sm font-semibold tabular-nums">
-                  {percent}%
-                </span>
-              </div>
+            {request.live?.progress != null && (
+              <LiveProgressBar
+                progress={request.live.progress}
+                remainingSec={
+                  request.live.remainingMin != null ? request.live.remainingMin * 60 : null
+                }
+                ageSec={request.live.ageSec ?? 0}
+                ticking={!request.live.paused}
+                label="Progress"
+              />
             )}
             {left > 1 && (
               <p className="text-sm text-[var(--color-ink-muted)]">

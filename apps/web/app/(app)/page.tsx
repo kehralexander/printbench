@@ -21,9 +21,18 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { Button } from '@/components/ui/button'
 import { ModelCard, formatDimensions } from '@/components/model/model-card'
 import { ClockTime } from '@/components/ui/clock-time'
+import { AutoRefresh } from '@/components/ui/auto-refresh'
+import { LiveProgressBar } from '@/components/printer/live-progress'
 import { UnratedPrints } from './prints/unrated-prints'
 
 export const dynamic = 'force-dynamic'
+
+/*
+ * As often as the worker reads the printers (PRINTER_POLL_SECONDS, 20 by
+ * default); sooner would only re-show the same reading. The bars tick on in
+ * between.
+ */
+const PRINTER_REFRESH_MS = 20_000
 
 async function counts() {
   const result = await getDb().execute<{
@@ -109,7 +118,12 @@ interface PrinterLine {
   label: string
   tone: 'accent' | 'danger' | 'neutral'
   filename: string | null
-  percent: number | null
+  /** 0..1 */
+  progress: number | null
+  remainingSec: number | null
+  /** How old the worker's reading was when this rendered. */
+  ageSec: number
+  paused: boolean
   /** ISO; when a running print should finish. */
   doneAt: string | null
 }
@@ -125,7 +139,17 @@ async function printerLines(): Promise<PrinterLine[]> {
 
 function printerLine(printer: PrinterSnapshot): PrinterLine {
   const status = printer.fresh ? printer.status : null
-  const base = { id: printer.id, name: printer.name, filename: null, percent: null, doneAt: null }
+  const ageSec = printer.ageSec ?? 0
+  const base = {
+    id: printer.id,
+    name: printer.name,
+    filename: null,
+    progress: null,
+    remainingSec: null,
+    ageSec,
+    paused: false,
+    doneAt: null,
+  }
   if (!status)
     return {
       ...base,
@@ -141,10 +165,12 @@ function printerLine(printer: PrinterSnapshot): PrinterLine {
     label: status.state === 'paused' ? 'Paused' : 'Printing',
     tone: 'accent',
     filename: status.filename?.split('/').pop() ?? null,
-    percent: status.progress != null ? Math.round(status.progress * 100) : null,
+    progress: status.progress ?? null,
+    remainingSec: status.remainingSec ?? null,
+    paused: status.state === 'paused',
     doneAt:
       status.state === 'printing' && status.remainingSec != null
-        ? new Date(Date.now() + status.remainingSec * 1000).toISOString()
+        ? new Date(Date.now() + (status.remainingSec - ageSec) * 1000).toISOString()
         : null,
   }
 }
@@ -216,6 +242,7 @@ export default async function DashboardPage() {
 
   return (
     <>
+      {printers.length > 0 && <AutoRefresh intervalMs={PRINTER_REFRESH_MS} />}
       <PageHeader
         title={`Welcome, ${user.name.split(' ')[0]}`}
         description="Your print library at a glance."
@@ -281,16 +308,15 @@ export default async function DashboardPage() {
                       {printer.filename}
                     </p>
                   )}
-                  {printer.percent != null && (
-                    <div className="flex items-center gap-2">
-                      <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-[var(--color-surface-2)]">
-                        <div
-                          className="h-full rounded-full bg-[var(--color-accent)]"
-                          style={{ width: `${printer.percent}%` }}
-                        />
-                      </div>
-                      <span className="text-xs font-medium tabular-nums">{printer.percent}%</span>
-                    </div>
+                  {printer.progress != null && (
+                    <LiveProgressBar
+                      progress={printer.progress}
+                      remainingSec={printer.remainingSec}
+                      ageSec={printer.ageSec}
+                      ticking={!printer.paused}
+                      label={`${printer.name} progress`}
+                      compact
+                    />
                   )}
                   {printer.doneAt && (
                     <p className="text-xs text-[var(--color-ink-muted)]">

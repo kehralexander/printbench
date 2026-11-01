@@ -1,30 +1,28 @@
 import Link from 'next/link'
 import type { Route } from 'next'
-import { eq, sql } from 'drizzle-orm'
+import { sql } from 'drizzle-orm'
 import { Printer } from 'lucide-react'
 import { getSessionUser } from '@pb/auth'
 import {
   can,
   countUnmatchedJobs,
-  decryptSecret,
   listRequests,
   loadNextHints,
   matchLibraryFile,
-  readPrinterStatus,
   spoolmanSpoolLink,
   type FilamentSlot,
   type LoadNextHint,
   type PrinterStatus,
 } from '@pb/core'
-import { formatEstimate } from '@pb/core/requests'
 import { getDb, schema } from '@pb/db'
 import { PageHeader } from '@/components/shell/page-header'
 import { NotPermitted } from '@/components/shell/not-permitted'
 import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
-import { ClockTime } from '@/components/ui/clock-time'
 import { EmptyState } from '@/components/ui/empty-state'
 import { AutoRefresh } from '@/components/ui/auto-refresh'
+import { PrintProgress } from '@/components/printer/live-progress'
+import { readPrintersLive } from '@/lib/printer-live'
 
 export const dynamic = 'force-dynamic'
 export const metadata = { title: 'Printer status' }
@@ -46,8 +44,9 @@ interface JobRequest {
 
 /**
  * What each configured printer is doing: idle, or busy with which file, how
- * far along, and when it should be done. Read live from the printers on every
- * render; nothing here is stored except when each was last reachable.
+ * far along, and when it should be done. Read live from the printers — shared
+ * between viewers for a few seconds, see lib/printer-live.ts — and nothing here
+ * is stored except when each was last reachable.
  */
 export default async function PrintersPage() {
   const user = await getSessionUser()
@@ -79,29 +78,8 @@ export default async function PrintersPage() {
     )
   }
 
-  const statuses = await Promise.all(
-    hosts.map((host) =>
-      readPrinterStatus({
-        id: host.id,
-        name: host.name,
-        protocol: host.protocol,
-        endpoint: host.endpoint,
-        apiKey: decryptSecret(host.credentials),
-      }),
-    ),
-  )
-
-  const reachable = hosts.filter((_, index) => statuses[index]!.state !== 'offline')
-  if (reachable.length > 0) {
-    await Promise.all(
-      reachable.map((host) =>
-        db
-          .update(schema.printHosts)
-          .set({ lastSeenOk: new Date() })
-          .where(eq(schema.printHosts.id, host.id)),
-      ),
-    ).catch(() => undefined)
-  }
+  const readings = await readPrintersLive(hosts)
+  const statuses = readings.map((reading) => reading.status)
 
   const [files, jobRequests, unmatched] = await Promise.all([
     Promise.all(
@@ -110,7 +88,7 @@ export default async function PrintersPage() {
     openJobRequests(),
     countUnmatchedJobs(db),
   ])
-  const doneAt = statuses.map(doneAround)
+  const doneAt = readings.map(doneAround)
 
   // For idle printers, what in the queue they could start next.
   const queue = can(user, 'request:create')
@@ -155,6 +133,7 @@ export default async function PrintersPage() {
             file={files[index] ?? null}
             request={statuses[index]!.busy ? (jobRequests.get(host.id) ?? null) : null}
             doneAt={doneAt[index] ?? null}
+            ageSec={readings[index]!.ageSec}
             hint={hints.get(host.id) ?? null}
           />
         ))}
@@ -191,9 +170,9 @@ async function openJobRequests(): Promise<Map<string, JobRequest>> {
 }
 
 /** A paused job has no finish time; it ends whenever someone resumes it. */
-function doneAround(status: PrinterStatus): string | null {
+function doneAround({ status, readAt }: { status: PrinterStatus; readAt: number }): string | null {
   if (status.state !== 'printing' || status.remainingSec == null) return null
-  return new Date(Date.now() + status.remainingSec * 1000).toISOString()
+  return new Date(readAt + status.remainingSec * 1000).toISOString()
 }
 
 const STATE_LABEL: Record<PrinterStatus['state'], string> = {
@@ -212,6 +191,7 @@ function PrinterCard({
   file,
   request,
   doneAt,
+  ageSec,
   hint,
 }: {
   name: string
@@ -220,10 +200,11 @@ function PrinterCard({
   request: JobRequest | null
   /** When the job should finish, if the printer is printing and says how long. */
   doneAt: string | null
+  /** How old the reading was when this rendered. */
+  ageSec: number
   /** What it could start next from the queue, when it is idle. */
   hint: LoadNextHint | null
 }) {
-  const percent = status.progress != null ? Math.round(status.progress * 1000) / 10 : null
   const tone =
     status.state === 'printing'
       ? 'accent'
@@ -297,46 +278,16 @@ function PrinterCard({
       )}
 
       {status.busy && (
-        <div className="space-y-2">
-          {percent != null && (
-            <div className="flex items-center gap-3">
-              <div
-                role="progressbar"
-                aria-label={`${name} progress`}
-                aria-valuemin={0}
-                aria-valuemax={100}
-                aria-valuenow={Math.round(percent)}
-                className="h-2 flex-1 overflow-hidden rounded-full bg-[var(--color-surface-2)]"
-              >
-                <div
-                  className="h-full rounded-full bg-[var(--color-accent)] transition-[width]"
-                  style={{ width: `${percent}%` }}
-                />
-              </div>
-              <span className="w-14 text-right text-sm font-semibold tabular-nums">
-                {percent.toFixed(percent < 10 ? 1 : 0)}%
-              </span>
-            </div>
-          )}
-          <dl className="grid grid-cols-3 gap-2 text-sm">
-            <Fact label="Elapsed">
-              {status.elapsedSec != null ? formatEstimate(status.elapsedSec / 60) : '—'}
-            </Fact>
-            <Fact
-              label="Remaining"
-              title={
-                status.remainingSource === 'extrapolated'
-                  ? 'Extrapolated from progress so far'
-                  : undefined
-              }
-            >
-              {status.remainingSec != null
-                ? `${status.remainingSource === 'extrapolated' ? '~' : ''}${formatEstimate(status.remainingSec / 60)}`
-                : '—'}
-            </Fact>
-            <Fact label="Done around">{doneAt ? <ClockTime value={doneAt} /> : '—'}</Fact>
-          </dl>
-        </div>
+        <PrintProgress
+          progress={status.progress ?? null}
+          elapsedSec={status.elapsedSec ?? null}
+          remainingSec={status.remainingSec ?? null}
+          extrapolated={status.remainingSource === 'extrapolated'}
+          doneAt={doneAt}
+          ageSec={ageSec}
+          ticking={status.state === 'printing'}
+          label={`${name} progress`}
+        />
       )}
 
       {hint && (
@@ -375,23 +326,6 @@ function PrinterCard({
         </p>
       )}
     </Card>
-  )
-}
-
-function Fact({
-  label,
-  title,
-  children,
-}: {
-  label: string
-  title?: string
-  children: React.ReactNode
-}) {
-  return (
-    <div title={title}>
-      <dt className="text-xs text-[var(--color-ink-muted)]">{label}</dt>
-      <dd className="font-medium tabular-nums">{children}</dd>
-    </div>
   )
 }
 

@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
-import { usePathname } from 'next/navigation'
+import { usePathname, useRouter } from 'next/navigation'
 import { Check, CircleAlert, LoaderCircle, X } from 'lucide-react'
 import type { Activity } from '@/lib/activity'
 import { reconcileActivity, SUCCESS_HOLD_MS, type ActivityRow } from './activity-state'
@@ -10,12 +10,14 @@ import { cn } from '@/lib/cn'
 
 export function ActivityPanel() {
   const pathname = usePathname()
+  const router = useRouter()
   const [rows, setRows] = useState<ActivityRow[]>([])
   const [stale, setStale] = useState(false)
   const [now, setNow] = useState(0)
   const startedAt = useRef(0)
   const dismissed = useRef(new Set<string>())
   const trackedIds = useRef<string[]>([])
+  const activeIds = useRef(new Set<string>())
 
   useEffect(() => {
     trackedIds.current = rows
@@ -51,9 +53,21 @@ export function ActivityPanel() {
         if (!response.ok) throw new Error('Activity unavailable')
         const { activities } = (await response.json()) as { activities: Activity[] }
         if (stopped) return
-        busy = activities.some(
-          (activity) => activity.state === 'running' || activity.state === 'queued',
+        const active = new Set(
+          activities
+            .filter((activity) => activity.state === 'running' || activity.state === 'queued')
+            .map((activity) => activity.id),
         )
+        busy = active.size > 0
+        /*
+         * Whatever page is open may be showing what just finished — a scan's
+         * results, a model's new thumbnails, a health check's findings — so
+         * re-render it, rather than leave the toast saying done above a page
+         * that does not show it yet.
+         */
+        const finished = [...activeIds.current].some((id) => !active.has(id))
+        activeIds.current = active
+        if (finished) router.refresh()
         const time = Date.now()
         setNow(time)
         setRows((current) =>
@@ -78,7 +92,7 @@ export function ActivityPanel() {
       document.removeEventListener('visibilitychange', wake)
       window.removeEventListener('focus', wake)
     }
-  }, [pathname])
+  }, [pathname, router])
 
   const hasCompleted = rows.some((row) => row.finishedAt !== undefined)
   useEffect(() => {

@@ -10,10 +10,14 @@ import { NotPermitted } from '@/components/shell/not-permitted'
 import { Card } from '@/components/ui/card'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Button } from '@/components/ui/button'
+import { AutoRefresh } from '@/components/ui/auto-refresh'
 import { PrintTimeline } from './print-timeline'
 import { UnratedPrints } from './unrated-prints'
 
 export const dynamic = 'force-dynamic'
+
+/** While a print on screen is still running; the worker closes it when the printer finishes. */
+const RUNNING_REFRESH_MS = 30_000
 export const metadata = { title: 'Print history' }
 
 const PAGE_SIZE = 50
@@ -56,6 +60,9 @@ export default async function PrintsPage({
 
   return (
     <>
+      {prints.some((print) => print.status === 'in_progress') && (
+        <AutoRefresh intervalMs={RUNNING_REFRESH_MS} />
+      )}
       <PageHeader
         title="Print history"
         description={

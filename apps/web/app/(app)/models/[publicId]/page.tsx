@@ -26,6 +26,7 @@ import {
 import { PageHeader } from '@/components/shell/page-header'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
+import { AutoRefresh } from '@/components/ui/auto-refresh'
 import { formatBytes, formatDimensions } from '@/components/model/model-card'
 import { ModelPreview } from '@/components/viewer/model-preview'
 import { DownloadModelButton } from './download-button'
@@ -41,6 +42,9 @@ import { QueueButton } from './queue-button'
 import { AddFilesButton } from './add-files-button'
 
 export const dynamic = 'force-dynamic'
+
+const RENDERING_REFRESH_MS = 5_000
+const PRINTING_REFRESH_MS = 30_000
 
 type ModelDetail = {
   id: string
@@ -241,6 +245,14 @@ export default async function ModelPage({ params }: { params: Promise<{ publicId
       canQueue ? filamentOptions(db) : Promise.resolve([]),
     ])
 
+  /*
+   * Keep the page current while something on it is still changing: files the
+   * worker is making previews for (quickly — someone just added them and is
+   * waiting), or a print still running on a printer (slowly).
+   */
+  const rendering = files.rows.some((f) => f.thumb_state === 'pending' && !f.missing_at)
+  const printing = prints.some((print) => print.status === 'in_progress')
+
   const canCollect = can(policyUser, 'collection:edit')
   const allCollections = canCollect ? await listCollections(db) : []
 
@@ -315,6 +327,9 @@ export default async function ModelPage({ params }: { params: Promise<{ publicId
 
   return (
     <>
+      {(rendering || printing) && (
+        <AutoRefresh intervalMs={rendering ? RENDERING_REFRESH_MS : PRINTING_REFRESH_MS} />
+      )}
       <nav className="mb-4 flex items-center gap-1.5 text-sm text-[var(--color-ink-muted)]">
         <Link href="/models" className="hover:text-[var(--color-ink)]">
           Models
