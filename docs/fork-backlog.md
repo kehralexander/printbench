@@ -1,8 +1,8 @@
 # Fork backlog
 
-Improvements requested for the fork (branch `oidc`) after the printer job
-tracking release (`v0.7.4-oidc.6`). All done in `v0.7.4-oidc.7`; see
-`docs/releases/v0.7.4-oidc.7.md` for how each turned out.
+Improvements requested for the fork (branch `oidc`) after printer job
+tracking landed. All done in v0.8.0; see `docs/releases/v0.8.0.md` for how
+each turned out.
 
 Two changes from the original wording:
 
