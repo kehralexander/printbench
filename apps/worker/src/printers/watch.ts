@@ -1,4 +1,4 @@
-import { decryptSecret, readPrinterStatus, trackPrinter } from '@pb/core'
+import { decryptSecret, readPrinterStatus, relinkUnmatchedJobs, trackPrinter } from '@pb/core'
 import { getDb, schema } from '@pb/db'
 
 /**
@@ -64,4 +64,11 @@ export async function tick(): Promise<void> {
       }
     }),
   )
+  // Jobs whose file has since turned up in the library get filed under it.
+  try {
+    const linked = await relinkUnmatchedJobs(db)
+    if (linked > 0) console.log(`[printers] linked ${linked} earlier job(s) to the library`)
+  } catch (error) {
+    console.error('[printers] could not link earlier jobs:', error)
+  }
 }

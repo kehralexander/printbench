@@ -17,6 +17,8 @@ export const AUDIT_ACTIONS = {
   'auth.password_reset': 'Reset a password with a recovery link',
   'auth.password_reset_issued': 'Issued a password reset link',
   'auth.setup': 'Created the first admin account',
+  'auth.user_provisioned': 'Signed in with SSO for the first time',
+  'auth.role_synced': 'Took a role from SSO groups',
 
   'user.created': 'Added a user',
   'user.updated': 'Edited a user',
@@ -62,12 +64,16 @@ export const AUDIT_ACTIONS = {
   'print.completed': 'Print completed',
   'print.updated': 'Edited a print',
   'print.deleted': 'Deleted a print',
+  'print.rated': 'Rated a print',
+  'print.job_linked': 'Linked a printer job to a model',
 
   'request.created': 'Added to the print queue',
   'request.updated': 'Edited a print request',
   'request.status_changed': 'Moved a print request',
   'request.completed': 'Print request completed',
   'request.deleted': 'Removed a print request',
+  'request.reordered': 'Reordered the print queue',
+  'request.shared': 'Made a status link for a request',
 
   'printer.created': 'Added a printer',
   'printer.updated': 'Changed a printer',

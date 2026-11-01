@@ -81,6 +81,8 @@ export interface PrintRunView {
   filamentUsedG: number | null
   rating: number | null
   notes: string | null
+  /** A photo of how it came out; served by /api/prints/[id]/photo. */
+  hasPhoto?: boolean
   createdAt: string
 }
 
@@ -372,6 +374,17 @@ function PrintRow({
         )}
         {print.userName && (
           <p className="mt-0.5 text-xs text-[var(--color-ink-faint)]">by {print.userName}</p>
+        )}
+        {print.hasPhoto && (
+          <a href={`/api/prints/${print.id}/photo`} target="_blank" rel="noreferrer">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={`/api/prints/${print.id}/photo`}
+              alt="Photo of this print"
+              loading="lazy"
+              className="mt-2 max-h-40 rounded-[var(--radius-control)] bg-[var(--color-surface-2)] object-cover"
+            />
+          </a>
         )}
       </div>
 

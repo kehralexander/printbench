@@ -6,7 +6,9 @@ import {
   canSendToPrinter,
   formatEstimate,
   listRequests,
+  loadNextHints,
   loadedFilament,
+  spoolForecast,
   printerSnapshots,
   listSpoolmanSpools,
   spoolmanEnabled,
@@ -24,7 +26,9 @@ import { Card } from '@/components/ui/card'
 import { ClockTime } from '@/components/ui/clock-time'
 import { EmptyState } from '@/components/ui/empty-state'
 import { AddRequests } from './add-requests'
-import { RequestRow, type QueueRow, type SendTarget, type SpoolBadge } from './request-row'
+import { QueueList } from './queue-list'
+import { ResetOrder } from './reset-order'
+import type { NextHint, QueueRow, SendTarget, SpoolBadge, SpoolShortfall } from './request-row'
 
 export const dynamic = 'force-dynamic'
 export const metadata = { title: 'Print queue' }
@@ -60,6 +64,11 @@ export default async function QueuePage({
     filamentOptions(db),
     printerSnapshots(db),
   ])
+  // The look-ahead needs the open queue whatever the filter shows.
+  const open =
+    filter.key === 'open'
+      ? requests
+      : await listRequests(db, { status: ['requested', 'printing'], limit: 200 })
 
   // What the watched printers have loaded, from the worker's last reading.
   const printerSlots = printers
@@ -81,6 +90,52 @@ export default async function QueuePage({
         ])
       : [],
   )
+
+  // What each idle printer could start next, from what it has loaded.
+  const idle = printers
+    .filter(
+      (printer) =>
+        printer.fresh &&
+        printer.status &&
+        !printer.status.busy &&
+        printer.status.state !== 'offline' &&
+        printer.status.state !== 'error',
+    )
+    .map((printer) => ({ id: printer.id, name: printer.name, slots: printer.status!.slots ?? [] }))
+  const hints = loadNextHints(
+    idle,
+    open.filter((request) => request.status === 'requested'),
+  )
+  const nextOn = new Map<string, NextHint[]>()
+  for (const hint of hints) {
+    if (!hint.ready) continue
+    const list = nextOn.get(hint.ready.request.id) ?? []
+    list.push({ printerName: hint.printerName, slotIndex: hint.ready.slot?.index ?? null })
+    nextOn.set(hint.ready.request.id, list)
+  }
+
+  // Whether the spools last for everything queued on them, in queue order.
+  const forecast = spoolman?.ok
+    ? spoolForecast(
+        open.map((request) => ({
+          id: request.id,
+          title: request.title,
+          status: request.status === 'printing' ? 'printing' : 'requested',
+          spoolmanSpoolId: request.spoolmanSpoolId,
+          filamentG: request.filamentG,
+          left: Math.max(1, request.quantity - request.printsDone),
+          progress: request.live?.progress ?? null,
+        })),
+        new Map(spoolman.spools.map((spool) => [spool.id, spool.remainingG])),
+      ).filter((spool) => spool.runsOutAfter != null)
+    : []
+  const shortfalls = new Map<string, SpoolShortfall>()
+  for (const spool of forecast) {
+    for (const id of spool.shortRequestIds) {
+      shortfalls.set(id, { spoolId: spool.spoolId, after: spool.runsOutAfter!, of: spool.prints })
+    }
+  }
+  const manualOrder = open.some((request) => request.position != null)
 
   // Working the queue is a member's job; asking is open to anyone signed in.
   const canRun = can(policyUser, 'request:manage')
@@ -121,6 +176,8 @@ export default async function QueuePage({
       request.modelFileId != null &&
       request.filename != null &&
       canSendToPrinter(request.filename.split('.').pop() ?? ''),
+    shortfall: shortfalls.get(request.id) ?? null,
+    nextOn: nextOn.get(request.id) ?? [],
     dueAt: request.dueAt?.toISOString() ?? null,
     createdAt: request.createdAt.toISOString(),
     printRunId: request.printRunId,
@@ -151,8 +208,38 @@ export default async function QueuePage({
         <AddRequests requesterSuggestions={requesters} filaments={filaments} />
       </div>
 
+      {canRun && (hints.length > 0 || forecast.length > 0) && (
+        <Card className="mb-4 space-y-1.5 p-3 text-sm">
+          {hints.map((hint) => (
+            <p key={hint.printerId}>
+              <span className="font-medium">{hint.printerName} is idle.</span>{' '}
+              {hint.ready ? (
+                <>
+                  Ready to start: {hint.ready.request.title}
+                  {hint.ready.slot && ` (slot ${hint.ready.slot.index + 1})`}.
+                </>
+              ) : (
+                'Nothing queued matches what it has loaded.'
+              )}
+              {hint.swap && (
+                <span className="text-[var(--color-ink-muted)]">
+                  {' '}
+                  Most urgent is {hint.swap.request.title}: load {hint.swap.filament}.
+                </span>
+              )}
+            </p>
+          ))}
+          {forecast.map((spool) => (
+            <p key={spool.spoolId} className="text-[var(--color-danger)]">
+              {spoolLabel(spool.spoolId)} runs out after {spool.runsOutAfter} of the {spool.prints}{' '}
+              queued prints on it (needs ~{spool.neededG} g, {Math.round(spool.remainingG)} g left).
+            </p>
+          ))}
+        </Card>
+      )}
+
       {!empty && (
-        <nav className="mb-4 flex flex-wrap gap-1.5">
+        <nav className="mb-4 flex flex-wrap items-center gap-1.5">
           {FILTERS.map((option) => (
             <Link
               key={option.key}
@@ -167,6 +254,11 @@ export default async function QueuePage({
               {option.label}
             </Link>
           ))}
+          {canRun && manualOrder && filter.key === 'open' && (
+            <span className="ml-auto">
+              <ResetOrder />
+            </span>
+          )}
         </nav>
       )}
 
@@ -197,20 +289,27 @@ export default async function QueuePage({
         />
       ) : (
         <Card className="overflow-hidden">
-          <ul className="divide-y divide-[var(--color-border)]">
-            {rows.map((request) => (
-              <RequestRow
-                key={request.id}
-                request={request}
-                canRun={canRun}
-                filaments={filaments}
-                sendTargets={sendTargets}
-              />
-            ))}
-          </ul>
+          <QueueList
+            rows={rows}
+            canRun={canRun}
+            filaments={filaments}
+            sendTargets={sendTargets}
+            sortable={canRun && filter.key === 'open' && rows.length > 1}
+          />
         </Card>
       )}
     </>
+  )
+}
+
+function spoolLabel(spoolId: number) {
+  const url = spoolmanSpoolLink(spoolId)
+  return url ? (
+    <a href={url} target="_blank" rel="noreferrer" className="underline">
+      Spool #{spoolId}
+    </a>
+  ) : (
+    `Spool #${spoolId}`
   )
 }
 

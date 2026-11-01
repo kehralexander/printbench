@@ -68,6 +68,8 @@ export const printRuns = pgTable(
     rating: smallint('rating'),
     notes: text('notes'),
     photoKey: text('photo_key'),
+    /** Set when someone waved off "how did it go?" for a print the printer logged. */
+    reviewDismissedAt: timestamp('review_dismissed_at', { withTimezone: true }),
 
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
@@ -127,6 +129,8 @@ export const printerJobs = pgTable(
     printSec: integer('print_sec'),
     startedAt: timestamp('started_at', { withTimezone: true }).notNull(),
     finishedAt: timestamp('finished_at', { withTimezone: true }),
+    /** Set when an unmatched job was waved off rather than linked to a model. */
+    dismissedAt: timestamp('dismissed_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index('printer_jobs_host_idx').on(t.hostId, t.startedAt)],

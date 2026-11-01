@@ -197,6 +197,72 @@ export async function sendToPrinter(
   }
 }
 
+/** A file larger than this is not G-code anyone meant to keep. */
+const MAX_DOWNLOAD_BYTES = 512 * 1024 * 1024
+
+export type DownloadResult =
+  { ok: true; filename: string; data: Buffer } | { ok: false; error: string }
+
+/**
+ * Fetches a file back from the printer's own storage, by the name it reported
+ * printing — for a job started on the printer that the library never had.
+ *
+ * Moonraker and OctoPrint serve their files back; PrusaLink does not offer a
+ * plain download, so it is refused rather than half-supported.
+ */
+export async function downloadFromPrinter(
+  host: PrintHostConfig,
+  printerFilename: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<DownloadResult> {
+  if (!isValidEndpoint(host.endpoint)) {
+    return { ok: false, error: 'Endpoint must be an http or https URL.' }
+  }
+  const relative = printerRelativePath(printerFilename)
+  const filename = relative.split('/').pop() ?? ''
+  if (!relative || !filename || relative.split('/').some((part) => part === '..')) {
+    return { ok: false, error: 'The printer did not name a file that can be fetched.' }
+  }
+  const encoded = relative.split('/').map(encodeURIComponent).join('/')
+  const base = baseUrl(host.endpoint)
+  const url =
+    host.protocol === 'moonraker'
+      ? `${base}/server/files/gcodes/${encoded}`
+      : host.protocol === 'octoprint'
+        ? `${base}/downloads/files/local/${encoded}`
+        : null
+  if (!url) return { ok: false, error: `${host.name} cannot hand files back. Upload it instead.` }
+
+  const headers: Record<string, string> = {}
+  if (host.apiKey) headers['x-api-key'] = host.apiKey
+  try {
+    const response = await fetchImpl(url, {
+      headers,
+      signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS),
+    })
+    if (response.status === 404) {
+      return { ok: false, error: `${host.name} no longer has ${filename}.` }
+    }
+    if (!response.ok) return { ok: false, error: await describeHttpError(response) }
+    const size = Number(response.headers.get('content-length') ?? 0)
+    if (size > MAX_DOWNLOAD_BYTES) return { ok: false, error: `${filename} is too large to fetch.` }
+    const data = Buffer.from(await response.arrayBuffer())
+    if (data.length > MAX_DOWNLOAD_BYTES) {
+      return { ok: false, error: `${filename} is too large to fetch.` }
+    }
+    return { ok: true, filename, data }
+  } catch (error) {
+    return { ok: false, error: describeNetworkError(error, host.endpoint) }
+  }
+}
+
+/** "/home/pi/printer_data/gcodes/sub/a.gcode" and "gcodes/sub/a.gcode" → "sub/a.gcode". */
+export function printerRelativePath(printerFilename: string): string {
+  const clean = printerFilename.trim().replace(/\\/g, '/')
+  const at = clean.lastIndexOf('gcodes/')
+  return (at >= 0 ? clean.slice(at + 'gcodes/'.length) : clean).replace(/^\/+/, '')
+}
+
 async function uploadMultipart(
   fetchImpl: typeof fetch,
   url: string,

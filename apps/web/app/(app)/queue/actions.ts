@@ -7,6 +7,9 @@ import {
   assertCan,
   can,
   canSendToPrinter,
+  clearQueueOrder,
+  reorderRequests,
+  requestShareToken,
   createRequest,
   decryptSecret,
   createRequests,
@@ -362,6 +365,67 @@ export async function removeRequest(requestId: string): Promise<Result> {
     return { ok: true }
   } catch (error) {
     return { ok: false, error: describe(error, 'Could not remove that request.') }
+  }
+}
+
+/** Puts the open queue in the order it was dragged into. */
+export async function reorderQueue(orderedIds: string[]): Promise<Result> {
+  try {
+    const user = await requireUser()
+    assertCan(
+      { id: user.id, role: user.role ?? null, banned: user.banned ?? false },
+      'request:manage',
+    )
+    if (!Array.isArray(orderedIds) || orderedIds.some((id) => !/^[0-9a-f-]{36}$/i.test(id))) {
+      return { ok: false, error: 'That order did not make sense.' }
+    }
+    await reorderRequests(getDb(), orderedIds)
+    await audit(user, 'request.reordered', undefined, { count: orderedIds.length })
+    revalidatePath('/queue')
+    revalidatePath('/')
+    return { ok: true }
+  } catch (error) {
+    return { ok: false, error: describe(error, 'Could not reorder the queue.') }
+  }
+}
+
+/** Forgets the dragged order: priority, due date and age decide again. */
+export async function resetQueueOrder(): Promise<Result> {
+  try {
+    const user = await requireUser()
+    assertCan(
+      { id: user.id, role: user.role ?? null, banned: user.banned ?? false },
+      'request:manage',
+    )
+    await clearQueueOrder(getDb())
+    await audit(user, 'request.reordered', undefined, { reset: true })
+    revalidatePath('/queue')
+    revalidatePath('/')
+    return { ok: true }
+  } catch (error) {
+    return { ok: false, error: describe(error, 'Could not reset the order.') }
+  }
+}
+
+/** The request's status link for whoever asked for it, made on first use. */
+export async function shareRequestStatus(
+  requestId: string,
+): Promise<{ ok: true; path: string } | { ok: false; error: string }> {
+  try {
+    const authorized = await authorize(requestId, 'edit')
+    if (!authorized.ok) return authorized
+    const fresh = !authorized.request.shareToken
+    const token = await requestShareToken(getDb(), requestId)
+    if (fresh) {
+      await audit(authorized.user, 'request.shared', {
+        type: 'request',
+        id: requestId,
+        label: authorized.request.title,
+      })
+    }
+    return { ok: true, path: `/r/${token}` }
+  } catch (error) {
+    return { ok: false, error: describe(error, 'Could not make a link for that request.') }
   }
 }
 

@@ -10,6 +10,14 @@ import { nextCookies } from 'better-auth/next-js'
 import { recordAudit } from '@pb/core'
 import { getDb, schema, type Database } from '@pb/db'
 import { ROLES, type Role } from './roles'
+import {
+  SSO_NOT_ALLOWED,
+  groupMappingFromEnv,
+  groupsFromClaims,
+  mapsRoles,
+  ssoVerdict,
+  type SsoVerdict,
+} from './oidc-provisioning'
 
 /**
  * better-auth is wrapped so nothing else in the codebase imports it directly.
@@ -95,10 +103,18 @@ function oidcConfig(): OidcConfig | undefined {
     clientSecret,
     name: process.env.OIDC_NAME?.trim() || 'SSO',
     // Invite-only by default, like password accounts. When enabled, unknown
-    // users are created as viewers on their first SSO sign-in.
+    // users are created on their first SSO sign-in, with the role their
+    // groups give them (see oidc-provisioning.ts), or as viewers.
     allowSignUp: process.env.OIDC_ALLOW_SIGNUP?.trim().toLowerCase() === 'true',
   }
 }
+
+/**
+ * What the provider said about the person signing in, for the rest of the
+ * same request: the profile is only seen while fetching user info, and the
+ * account is only known once better-auth has found or created it.
+ */
+const ssoSignIns = new AsyncLocalStorage<{ verdict?: SsoVerdict; groups?: string[] }>()
 
 /** Display name of the configured SSO provider, or null when SSO is off. */
 export function ssoProviderName(): string | null {
@@ -191,7 +207,7 @@ export function createAuth(database: Database): ReturnType<typeof buildNativeAut
       if (request.method === 'POST' && pathname.endsWith(nativeChangePassword.path)) {
         return serializePasswordChange(request.headers, () => auth.handler(request))
       }
-      return auth.handler(request)
+      return ssoSignIns.run({}, () => auth.handler(request))
     },
   }
 }
@@ -199,6 +215,7 @@ export function createAuth(database: Database): ReturnType<typeof buildNativeAut
 function buildNativeAuth(database: Database) {
   const baseURL = configuredBaseUrl()
   const oidc = oidcConfig()
+  const groups = groupMappingFromEnv()
   return betterAuth({
     appName: 'PrintBench',
     baseURL,
@@ -274,6 +291,32 @@ function buildNativeAuth(database: Database) {
       },
     },
 
+    databaseHooks: {
+      user: {
+        create: {
+          // A first SSO sign-in gets the role its groups give it, not the default.
+          async before(user) {
+            const verdict = ssoSignIns.getStore()?.verdict
+            if (!verdict?.allowed || !mapsRoles(groups)) return
+            return { data: { ...user, role: verdict.role } }
+          },
+          async after(user) {
+            const signIn = ssoSignIns.getStore()
+            if (!signIn?.verdict?.allowed) return
+            await recordAudit(database, {
+              action: 'auth.user_provisioned',
+              actor: { type: 'user', id: user.id, name: user.name },
+              target: { type: 'user', id: user.id, label: user.email },
+              detail: {
+                role: (user as { role?: string }).role ?? ROLES.viewer,
+                groups: signIn.groups ?? [],
+              },
+            })
+          },
+        },
+      },
+    },
+
     /*
      * Sign-ins are recorded here rather than in the login form's code path
      * because this is the only place that sees every attempt, including the
@@ -296,6 +339,7 @@ function buildNativeAuth(database: Database) {
         if (ctx.path !== '/sign-in/email' && !sso) return
         const created = ctx.context.newSession
         if (created) {
+          if (sso) await syncSsoRole(database, created.user, groups)
           await recordAudit(database, {
             action: 'auth.login',
             actor: { type: 'user', id: created.user.id, name: created.user.name },
@@ -307,11 +351,18 @@ function buildNativeAuth(database: Database) {
         }
 
         if (sso) {
+          const refused = ssoSignIns.getStore()?.verdict?.allowed === false
           await recordAudit(database, {
             action: 'auth.login_failed',
             outcome: 'failure',
             actor: { type: 'anonymous', name: '(sso)' },
-            detail: { reason: 'SSO sign-in was refused', method: 'sso' },
+            detail: {
+              reason: refused
+                ? 'Not in a group allowed to use PrintBench'
+                : 'SSO sign-in was refused',
+              method: 'sso',
+              ...(refused && { groups: ssoSignIns.getStore()?.groups ?? [] }),
+            },
             ip: clientIp(ctx.headers),
           })
           return
@@ -349,6 +400,28 @@ function buildNativeAuth(database: Database) {
                   disableSignUp: !oidc.allowSignUp,
                   // Signing out of PrintBench should not end the provider session.
                   disableProviderLogout: true,
+                  mapProfileToUser(profile) {
+                    const claims = profile as Record<string, unknown>
+                    const memberOf = groupsFromClaims(claims, groups.claim)
+                    const verdict = ssoVerdict(memberOf, groups)
+                    const signIn = ssoSignIns.getStore()
+                    if (signIn) Object.assign(signIn, { verdict, groups: memberOf })
+                    if (!verdict.allowed) {
+                      // Back to the login page with a reason, like any other refusal.
+                      throw new APIError(
+                        'FOUND',
+                        undefined,
+                        new Headers({
+                          location: `${baseURL ?? ''}/login?error=${SSO_NOT_ALLOWED}`,
+                        }),
+                      )
+                    }
+                    const name = [claims.name, claims.preferred_username, claims.email].find(
+                      (value): value is string => typeof value === 'string' && value.trim() !== '',
+                    )
+                    // The operator runs the provider, so its addresses count as verified.
+                    return { ...(name && { name }), emailVerified: true }
+                  },
                 },
               ],
             }),
@@ -357,6 +430,35 @@ function buildNativeAuth(database: Database) {
       // Must be last: lets server actions set cookies.
       nextCookies(),
     ],
+  })
+}
+
+/**
+ * Gives an SSO account the role its groups say, on every sign-in, so a change
+ * in the provider takes effect the next time someone signs in.
+ *
+ * Only for accounts that sign in through SSO alone: an account with a password
+ * was set up here, and its role is whatever an admin chose for it.
+ */
+async function syncSsoRole(
+  database: Database,
+  user: { id: string; name: string; role?: unknown },
+  mapping: ReturnType<typeof groupMappingFromEnv>,
+): Promise<void> {
+  const verdict = ssoSignIns.getStore()?.verdict
+  if (!verdict?.allowed || !mapsRoles(mapping) || user.role === verdict.role) return
+  const local = await database
+    .select({ id: schema.account.id })
+    .from(schema.account)
+    .where(and(eq(schema.account.userId, user.id), eq(schema.account.providerId, 'credential')))
+    .limit(1)
+  if (local.length > 0) return
+  await database.update(schema.user).set({ role: verdict.role }).where(eq(schema.user.id, user.id))
+  await recordAudit(database, {
+    action: 'auth.role_synced',
+    actor: { type: 'user', id: user.id, name: user.name },
+    target: { type: 'user', id: user.id, label: user.name },
+    detail: { from: typeof user.role === 'string' ? user.role : null, to: verdict.role },
   })
 }
 

@@ -9,6 +9,7 @@ import {
 import type { Database } from '@pb/db'
 import { schema } from '@pb/db'
 import { BED_ADHESIONS, NOZZLE_TYPES, type BedAdhesion, type NozzleType } from './print-fields'
+import { removePhotoFile } from './print-reviews'
 
 /*
  * Re-exported so the barrel still offers them alongside everything else
@@ -99,6 +100,8 @@ export interface PrintRun {
   filamentUsedG: number | null
   rating: number | null
   notes: string | null
+  /** A photo of how it came out was added. */
+  hasPhoto: boolean
   createdAt: Date
 }
 
@@ -401,16 +404,18 @@ export async function updatePrint(
   })
 }
 export async function deletePrint(db: Database, printId: string, actorId?: string): Promise<void> {
-  await db.transaction(async (tx) => {
+  const photoKey = await db.transaction(async (tx) => {
     const [previous] = await tx
       .select()
       .from(schema.printRuns)
       .where(eq(schema.printRuns.id, printId))
       .for('update')
-    if (!previous) return
+    if (!previous) return null
     await reconcilePrintUsage(tx, printId, [], previous.status, 'in_progress', actorId)
     await tx.delete(schema.printRuns).where(eq(schema.printRuns.id, printId))
+    return previous.photoKey
   })
+  await removePhotoFile(photoKey)
 }
 
 export async function listPrints(
@@ -473,6 +478,7 @@ export async function listPrints(
     filament_used_g: string | null
     rating: number | null
     notes: string | null
+    has_photo: boolean
     created_at: string
   }>(sql`
     SELECT p.id, p.model_id, m.name AS model_name, m.public_id AS model_public_id,
@@ -483,7 +489,7 @@ export async function listPrints(
            p.nozzle_temp_c, p.bed_temp_c,
            p.slicer_name, p.slicer_version, p.slicer_profile,
            p.status, p.started_at, p.finished_at, p.duration_min, p.filament_used_g,
-           p.rating, p.notes, p.created_at
+           p.rating, p.notes, (p.photo_key IS NOT NULL) AS has_photo, p.created_at
     FROM print_runs p
     JOIN models m ON m.id = p.model_id
     LEFT JOIN model_files f ON f.id = p.model_file_id
@@ -534,6 +540,7 @@ export async function listPrints(
     filamentUsedG: row.filament_used_g === null ? null : Number(row.filament_used_g),
     rating: row.rating,
     notes: row.notes,
+    hasPhoto: row.has_photo,
     createdAt: new Date(row.created_at),
   }))
 }

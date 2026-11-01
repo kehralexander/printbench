@@ -5,11 +5,15 @@ import { Printer } from 'lucide-react'
 import { getSessionUser } from '@pb/auth'
 import {
   can,
+  countUnmatchedJobs,
   decryptSecret,
+  listRequests,
+  loadNextHints,
   matchLibraryFile,
   readPrinterStatus,
   spoolmanSpoolLink,
   type FilamentSlot,
+  type LoadNextHint,
   type PrinterStatus,
 } from '@pb/core'
 import { formatEstimate } from '@pb/core/requests'
@@ -20,7 +24,7 @@ import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
 import { ClockTime } from '@/components/ui/clock-time'
 import { EmptyState } from '@/components/ui/empty-state'
-import { AutoRefresh } from './auto-refresh'
+import { AutoRefresh } from '@/components/ui/auto-refresh'
 
 export const dynamic = 'force-dynamic'
 export const metadata = { title: 'Printer status' }
@@ -99,13 +103,30 @@ export default async function PrintersPage() {
     ).catch(() => undefined)
   }
 
-  const [files, jobRequests] = await Promise.all([
+  const [files, jobRequests, unmatched] = await Promise.all([
     Promise.all(
       statuses.map((status) => (status.filename ? findPrintedFile(status.filename) : null)),
     ),
     openJobRequests(),
+    countUnmatchedJobs(db),
   ])
   const doneAt = statuses.map(doneAround)
+
+  // For idle printers, what in the queue they could start next.
+  const queue = can(user, 'request:create')
+    ? await listRequests(db, { status: ['requested'], limit: 200 })
+    : []
+  const hints = new Map(
+    loadNextHints(
+      hosts
+        .map((host, index) => ({ host, status: statuses[index]! }))
+        .filter(
+          ({ status }) => !status.busy && status.state !== 'offline' && status.state !== 'error',
+        )
+        .map(({ host, status }) => ({ id: host.id, name: host.name, slots: status.slots ?? [] })),
+      queue,
+    ).map((hint) => [hint.printerId, hint]),
+  )
 
   return (
     <>
@@ -114,6 +135,17 @@ export default async function PrintersPage() {
         title="Printer status"
         description="What each printer is doing right now. Updates every few seconds."
       />
+      {unmatched > 0 && (
+        <p className="-mt-5 mb-6 text-sm">
+          <Link href="/printers/jobs" className="text-[var(--color-accent)] hover:underline">
+            {unmatched} {unmatched === 1 ? 'print' : 'prints'} not in the library
+          </Link>
+          <span className="text-[var(--color-ink-muted)]">
+            {' '}
+            — link {unmatched === 1 ? 'it' : 'them'} to a model to complete the history.
+          </span>
+        </p>
+      )}
       <div className="grid gap-4 lg:grid-cols-2">
         {hosts.map((host, index) => (
           <PrinterCard
@@ -123,6 +155,7 @@ export default async function PrintersPage() {
             file={files[index] ?? null}
             request={statuses[index]!.busy ? (jobRequests.get(host.id) ?? null) : null}
             doneAt={doneAt[index] ?? null}
+            hint={hints.get(host.id) ?? null}
           />
         ))}
       </div>
@@ -179,6 +212,7 @@ function PrinterCard({
   file,
   request,
   doneAt,
+  hint,
 }: {
   name: string
   status: PrinterStatus
@@ -186,6 +220,8 @@ function PrinterCard({
   request: JobRequest | null
   /** When the job should finish, if the printer is printing and says how long. */
   doneAt: string | null
+  /** What it could start next from the queue, when it is idle. */
+  hint: LoadNextHint | null
 }) {
   const percent = status.progress != null ? Math.round(status.progress * 1000) / 10 : null
   const tone =
@@ -300,6 +336,32 @@ function PrinterCard({
             </Fact>
             <Fact label="Done around">{doneAt ? <ClockTime value={doneAt} /> : '—'}</Fact>
           </dl>
+        </div>
+      )}
+
+      {hint && (
+        <div className="rounded-[var(--radius-control)] bg-[var(--color-surface-2)] px-3 py-2 text-sm">
+          {hint.ready ? (
+            <p>
+              <span className="font-medium">Next up:</span>{' '}
+              <Link href="/queue" className="text-[var(--color-accent)] hover:underline">
+                {hint.ready.request.title}
+              </Link>
+              {hint.ready.slot && (
+                <span className="text-[var(--color-ink-muted)]">
+                  {' '}
+                  · loaded in slot {hint.ready.slot.index + 1}
+                </span>
+              )}
+            </p>
+          ) : (
+            <p className="text-[var(--color-ink-muted)]">Nothing queued matches what is loaded.</p>
+          )}
+          {hint.swap && (
+            <p className="mt-0.5 text-xs text-[var(--color-ink-muted)]">
+              Most urgent is {hint.swap.request.title}: load {hint.swap.filament}.
+            </p>
+          )}
         </div>
       )}
 

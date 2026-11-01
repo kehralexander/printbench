@@ -1,7 +1,7 @@
 import Link from 'next/link'
 import type { Route } from 'next'
 import { History } from 'lucide-react'
-import { listPrints, printStats, type PrintStatus } from '@pb/core'
+import { listPrints, printStats, unratedPrints, type PrintStatus } from '@pb/core'
 import { getDb } from '@pb/db'
 import { getSessionUser } from '@pb/auth'
 import { can } from '@pb/core'
@@ -11,6 +11,7 @@ import { Card } from '@/components/ui/card'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Button } from '@/components/ui/button'
 import { PrintTimeline } from './print-timeline'
+import { UnratedPrints } from './unrated-prints'
 
 export const dynamic = 'force-dynamic'
 export const metadata = { title: 'Print history' }
@@ -39,13 +40,15 @@ export default async function PrintsPage({
   const page = Math.max(Number(params.page ?? 1) || 1, 1)
 
   const db = getDb()
-  const [prints, stats] = await Promise.all([
+  const canRate = can({ id: user?.id ?? '', role: user?.role ?? null }, 'print:log')
+  const [prints, stats, unrated] = await Promise.all([
     listPrints(db, {
       status: filter.status,
       limit: PAGE_SIZE,
       offset: (page - 1) * PAGE_SIZE,
     }),
     printStats(db),
+    canRate && page === 1 ? unratedPrints(db, 10) : Promise.resolve([]),
   ])
 
   const hasMore = prints.length === PAGE_SIZE
@@ -67,7 +70,14 @@ export default async function PrintsPage({
         }
       />
 
-      <nav className="mb-4 flex flex-wrap gap-1.5">
+      <UnratedPrints
+        prints={unrated.map((print) => ({
+          ...print,
+          finishedAt: print.finishedAt?.toISOString() ?? null,
+        }))}
+      />
+
+      <nav className="mb-4 flex flex-wrap items-center gap-1.5">
         {FILTERS.map((option) => (
           <Link
             key={option.key}
@@ -82,6 +92,12 @@ export default async function PrintsPage({
             {option.label}
           </Link>
         ))}
+        <Link
+          href={'/prints/stats' as Route}
+          className="ml-auto text-sm text-[var(--color-accent)] hover:underline"
+        >
+          Success rates
+        </Link>
       </nav>
 
       {prints.length === 0 ? (
@@ -147,6 +163,7 @@ export default async function PrintsPage({
               filamentUsedG: print.filamentUsedG,
               rating: print.rating,
               notes: print.notes,
+              hasPhoto: print.hasPhoto,
               at: (print.startedAt ?? print.createdAt).toISOString(),
             }))}
           />

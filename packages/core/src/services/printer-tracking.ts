@@ -125,6 +125,16 @@ export async function trackPrinter(
         UPDATE printer_jobs
         SET progress = ${status.progress ?? null}, print_sec = ${roundOrNull(status.elapsedSec)}
         WHERE id = ${current.id}`)
+      // A file added to the library mid-print still gets its job.
+      if (!current.model_id) {
+        const file = await matchLibraryFile(db, current.filename)
+        if (file) {
+          await db.execute(sql`
+            UPDATE printer_jobs SET model_id = ${file.modelId}, model_file_id = ${file.modelFileId}
+            WHERE id = ${current.id} AND model_id IS NULL`)
+          current.model_id = file.modelId
+        }
+      }
       // A request raised or linked after the print began can still join it.
       if (!current.request_id && current.model_id) await attachRequest(db, current.id)
       return
@@ -179,8 +189,9 @@ async function startJob(
  * Puts the queue request this job is printing on the printer.
  *
  * One already marked printing and waiting for its job wins — someone pressed
- * Start, or Send & start — then a waiting one for the exact file, then one for
- * the model with no file chosen, in queue order.
+ * Start, or Send & start — then the first in the queue's manual order, then a
+ * waiting one for the exact file, then one for the model with no file chosen,
+ * by urgency.
  */
 async function attachRequest(db: Database, jobId: string): Promise<void> {
   await db.execute(sql`
@@ -194,7 +205,11 @@ async function attachRequest(db: Database, jobId: string): Promise<void> {
         AND r.prints_done < r.quantity
         AND (r.model_file_id = job.model_file_id
              OR (r.model_file_id IS NULL AND r.model_id = job.model_id))
+      -- Someone pressed Start or Send & start for one: that one. Otherwise the
+      -- queue's own order, a request for this very file before one for the
+      -- model in general.
       ORDER BY (r.status = 'printing') DESC,
+               r.position ASC NULLS LAST,
                (r.model_file_id IS NOT NULL) DESC,
                r.priority DESC, r.due_at ASC NULLS LAST, r.created_at ASC
       LIMIT 1
@@ -299,6 +314,7 @@ async function finishJob(
           -- back to wait for its next print starts afresh.
           started_at = ${complete ? sql`started_at` : sql`NULL`},
           print_run_id = ${complete ? printRunId : sql`print_run_id`},
+          position = ${complete ? sql`NULL` : sql`position`},
           updated_at = now()
       WHERE id = ${job.request_id}`)
   }
@@ -354,4 +370,181 @@ export async function printerSnapshots(db: Database): Promise<PrinterSnapshot[]>
     status: row.status,
     fresh: row.fresh === true,
   }))
+}
+
+/* ------------------------------------------------------------------ *
+ * Jobs the library did not know
+ * ------------------------------------------------------------------ */
+
+export interface UnmatchedJob {
+  id: string
+  hostId: string
+  printerName: string
+  filename: string
+  status: JobOutcome
+  progress: number | null
+  printSec: number | null
+  startedAt: Date
+  finishedAt: Date
+}
+
+/**
+ * Finished jobs whose file matched nothing in the library — started from the
+ * printer's screen, or sent straight from a slicer — and not waved off.
+ */
+export async function unmatchedJobs(db: Database, limit = 100): Promise<UnmatchedJob[]> {
+  const rows = await db.execute<{
+    id: string
+    host_id: string
+    printer_name: string
+    filename: string
+    status: JobOutcome
+    progress: string | null
+    print_sec: number | null
+    started_at: Date
+    finished_at: Date
+  }>(sql`
+    SELECT j.id, j.host_id, h.name AS printer_name, j.filename, j.status, j.progress,
+           j.print_sec, j.started_at, j.finished_at
+    FROM printer_jobs j JOIN print_hosts h ON h.id = j.host_id
+    WHERE j.model_id IS NULL AND j.finished_at IS NOT NULL AND j.dismissed_at IS NULL
+    ORDER BY j.started_at DESC
+    LIMIT ${Math.min(Math.max(limit, 1), 500)}`)
+  return rows.rows.map((row) => ({
+    id: row.id,
+    hostId: row.host_id,
+    printerName: row.printer_name,
+    filename: row.filename,
+    status: row.status,
+    progress: row.progress != null ? Number(row.progress) : null,
+    printSec: row.print_sec,
+    startedAt: new Date(row.started_at),
+    finishedAt: new Date(row.finished_at),
+  }))
+}
+
+export async function countUnmatchedJobs(db: Database): Promise<number> {
+  const rows = await db.execute<{ n: number }>(sql`
+    SELECT count(*)::int AS n FROM printer_jobs
+    WHERE model_id IS NULL AND finished_at IS NOT NULL AND dismissed_at IS NULL`)
+  return rows.rows[0]?.n ?? 0
+}
+
+/**
+ * Files a finished job under a model after the fact, and writes the print
+ * history entry it would have had: same printer, times, outcome and note.
+ *
+ * Every other unmatched job for the same file goes with it — the same plate
+ * printed again from the printer's screen is the same model. Returns how
+ * many jobs were linked.
+ */
+export async function linkJobToModel(
+  db: Database,
+  jobId: string,
+  modelId: string,
+  modelFileId: string | null = null,
+): Promise<number> {
+  const target = await db.execute<{ filename: string }>(sql`
+    SELECT filename FROM printer_jobs WHERE id = ${jobId}`)
+  const filename = target.rows[0]?.filename
+  if (!filename) return 0
+
+  // The model's own copy of the file, when it has one by that name.
+  const fileId =
+    modelFileId ??
+    (
+      await db.execute<{ id: string }>(sql`
+        SELECT id FROM model_files
+        WHERE model_id = ${modelId} AND missing_at IS NULL AND category = 'slicer'
+          AND lower(regexp_replace(filename, '^.*/', ''))
+              = lower(regexp_replace(${filename}, '^.*/', ''))
+        ORDER BY updated_at DESC LIMIT 1`)
+    ).rows[0]?.id ??
+    null
+
+  const jobs = await db.execute<{
+    id: string
+    host_name: string
+    status: JobOutcome
+    progress: string | null
+    print_sec: number | null
+    started_at: Date
+    finished_at: Date
+  }>(sql`
+    UPDATE printer_jobs j
+    SET model_id = ${modelId}, model_file_id = ${fileId}
+    FROM print_hosts h
+    WHERE h.id = j.host_id AND j.model_id IS NULL AND j.finished_at IS NOT NULL
+      AND (j.id = ${jobId} OR (j.filename = ${filename} AND j.dismissed_at IS NULL))
+    RETURNING j.id, h.name AS host_name, j.status, j.progress, j.print_sec,
+              j.started_at, j.finished_at`)
+
+  for (const job of jobs.rows) {
+    const startedAt = new Date(job.started_at)
+    const finishedAt = new Date(job.finished_at)
+    const durationMin =
+      job.print_sec != null && job.print_sec > 0
+        ? Math.round(job.print_sec / 60)
+        : Math.round((finishedAt.getTime() - startedAt.getTime()) / 60_000)
+    const run = await logPrint(db, {
+      modelId,
+      modelFileId: fileId,
+      recordingKey: `printer-job:${job.id}`,
+      printerName: job.host_name,
+      status: job.status === 'success' ? 'success' : 'failed',
+      startedAt,
+      finishedAt,
+      durationMin,
+      filamentUsedG: job.status === 'success' ? await plateFilamentG(db, modelId, fileId) : null,
+      notes: jobNote(job.host_name, job.status, Number(job.progress ?? 0), null),
+    })
+    await db.execute(sql`UPDATE printer_jobs SET print_run_id = ${run.id} WHERE id = ${job.id}`)
+  }
+  return jobs.rows.length
+}
+
+/**
+ * Links unmatched jobs whose file has since turned up in the library — fetched
+ * from the unmatched list, uploaded by hand, or found by a scan — and gives
+ * jobs already filed under a model the model's copy of the file once indexed. The worker
+ * runs it after each round of printer reads; it costs one query when there
+ * is nothing to do.
+ */
+export async function relinkUnmatchedJobs(db: Database): Promise<number> {
+  const names = await db.execute<{ id: string; filename: string }>(sql`
+    SELECT DISTINCT ON (lower(regexp_replace(j.filename, '^.*/', ''))) j.id, j.filename
+    FROM printer_jobs j
+    WHERE j.model_id IS NULL AND j.finished_at IS NOT NULL AND j.dismissed_at IS NULL
+      AND EXISTS (
+        SELECT 1 FROM model_files f JOIN models m ON m.id = f.model_id
+        WHERE f.missing_at IS NULL AND m.missing_at IS NULL AND f.category = 'slicer'
+          AND lower(regexp_replace(f.filename, '^.*/', ''))
+              = lower(regexp_replace(j.filename, '^.*/', ''))
+      )`)
+  let linked = 0
+  for (const row of names.rows) {
+    const file = await matchLibraryFile(db, row.filename)
+    if (file) linked += await linkJobToModel(db, row.id, file.modelId, file.modelFileId)
+  }
+
+  // Jobs filed under a model before its copy of the file was indexed get the file too.
+  await db.execute(sql`
+    WITH found AS (
+      UPDATE printer_jobs j SET model_file_id = f.id
+      FROM model_files f
+      WHERE j.model_file_id IS NULL AND j.model_id = f.model_id
+        AND f.missing_at IS NULL AND f.category = 'slicer'
+        AND lower(regexp_replace(f.filename, '^.*/', ''))
+            = lower(regexp_replace(j.filename, '^.*/', ''))
+      RETURNING j.print_run_id, f.id AS file_id
+    )
+    UPDATE print_runs p SET model_file_id = found.file_id, updated_at = now()
+    FROM found WHERE p.id = found.print_run_id AND p.model_file_id IS NULL`)
+  return linked
+}
+
+/** Waves a job off the unmatched list without filing it anywhere. */
+export async function dismissJob(db: Database, jobId: string): Promise<void> {
+  await db.execute(sql`
+    UPDATE printer_jobs SET dismissed_at = now() WHERE id = ${jobId} AND model_id IS NULL`)
 }

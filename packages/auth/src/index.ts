@@ -31,3 +31,4 @@ export {
   UnauthenticatedError,
   ForbiddenError,
 } from './session'
+export { SSO_NOT_ALLOWED } from './oidc-provisioning'

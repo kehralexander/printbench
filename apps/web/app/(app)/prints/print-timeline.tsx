@@ -33,6 +33,7 @@ export interface TimelinePrint {
   filamentUsedG: number | null
   rating: number | null
   notes: string | null
+  hasPhoto: boolean
   at: string
 }
 
@@ -127,6 +128,18 @@ export function PrintTimeline({ prints }: { prints: TimelinePrint[] }) {
                 </p>
               )}
             </div>
+
+            {print.hasPhoto && (
+              <a href={`/api/prints/${print.id}/photo`} target="_blank" rel="noreferrer">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={`/api/prints/${print.id}/photo`}
+                  alt={`Photo of ${print.modelName}`}
+                  loading="lazy"
+                  className="size-14 shrink-0 rounded-[var(--radius-control)] bg-[var(--color-surface-2)] object-cover"
+                />
+              </a>
+            )}
 
             <div className="shrink-0 text-right">
               <p className="text-xs text-[var(--color-ink-faint)]">{formatDate(print.at)}</p>

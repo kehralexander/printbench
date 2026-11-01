@@ -1,4 +1,5 @@
 import { eq, sql } from 'drizzle-orm'
+import { customAlphabet } from 'nanoid'
 import type { Database } from '@pb/db'
 import { schema } from '@pb/db'
 import { deletePrint, logPrint } from './print-service'
@@ -104,6 +105,10 @@ export interface PrintRequest {
   printsDone: number
   /** The printer it is on, while a watched printer is printing it. */
   live: LivePrint | null
+  /** A manual place in the queue, once someone has dragged it; lower first. */
+  position: number | null
+  /** The requester's status link, once one has been made. */
+  shareToken: string | null
 
   dueAt: Date | null
   closedAt: Date | null
@@ -633,6 +638,8 @@ export async function setRequestStatus(
         printer_job_id = ${next === 'printing' ? sql`printer_job_id` : sql`NULL`},
         -- Reopening a finished request asks for the whole quantity again.
         prints_done = ${current.status === 'done' && !closed ? sql`0` : sql`prints_done`},
+        -- A closed request leaves the manual order; reopened, it lines up anew.
+        position = ${closed ? sql`NULL` : sql`position`},
         updated_at = now()
     WHERE id = ${requestId}`)
 }
@@ -753,6 +760,8 @@ type Row = {
   live_printer: string | null
   live_progress: number | null
   live_remaining_sec: number | null
+  position: number | null
+  share_token: string | null
   due_at: string | null
   closed_at: string | null
   print_run_id: string | null
@@ -771,7 +780,7 @@ const SELECT_REQUEST = sql`
          r.model_file_id, mf.filename,
          r.quantity, r.priority, r.status, r.material, r.color_hex, r.color_name,
          r.estimated_min, r.started_at, r.spoolman_spool_id, r.filament_g, r.due_at, r.closed_at, r.print_run_id,
-         r.prints_done, lh.name AS live_printer,
+         r.prints_done, r.position, r.share_token, lh.name AS live_printer,
          CASE WHEN lh.fresh THEN (lh.status->>'progress')::float END AS live_progress,
          CASE WHEN lh.fresh THEN (lh.status->>'remainingSec')::float END AS live_remaining_sec,
          r.created_by, u.name AS created_by_name, r.created_at
@@ -818,6 +827,8 @@ function toRequest(row: Row): PrintRequest {
           remainingMin: row.live_remaining_sec != null ? row.live_remaining_sec / 60 : null,
         }
       : null,
+    position: row.position,
+    shareToken: row.share_token,
     dueAt: row.due_at ? new Date(row.due_at) : null,
     closedAt: row.closed_at ? new Date(row.closed_at) : null,
     printRunId: row.print_run_id,
@@ -870,10 +881,7 @@ export async function listRequests(
 
   const order = closedOnly
     ? sql`ORDER BY r.closed_at DESC NULLS LAST, r.created_at DESC`
-    : sql`ORDER BY (r.status IN ('done', 'cancelled')) ASC,
-                   r.priority DESC,
-                   r.due_at ASC NULLS LAST,
-                   r.created_at ASC`
+    : sql`ORDER BY (r.status IN ('done', 'cancelled')) ASC, ${QUEUE_ORDER}`
 
   const rows = await db.execute<Row>(sql`
     ${SELECT_REQUEST}
@@ -882,6 +890,117 @@ export async function listRequests(
     LIMIT ${limit} OFFSET ${Math.max(options.offset ?? 0, 0)}`)
 
   return rows.rows.map(toRequest)
+}
+
+/**
+ * The order of the open queue. A place someone dragged a request to comes
+ * first; everything never placed lines up after, most urgent first. The
+ * printer tracker uses the same order to pick between requests for one file.
+ */
+export const QUEUE_ORDER = sql`r.position ASC NULLS LAST, r.priority DESC, r.due_at ASC NULLS LAST, r.created_at ASC`
+
+/**
+ * Puts the open queue in the order given, as dragged. Only open requests take
+ * a place; anything not in the list keeps its own, after these.
+ */
+export async function reorderRequests(db: Database, orderedIds: string[]): Promise<void> {
+  if (orderedIds.length === 0) return
+  if (orderedIds.length > 500)
+    throw new RequestValidationError('That is too many to reorder at once.')
+  await db.execute(sql`
+    UPDATE print_requests r
+    SET position = o.ordinality::int, updated_at = now()
+    FROM unnest(${sql.param(orderedIds)}::uuid[]) WITH ORDINALITY AS o(id, ordinality)
+    WHERE r.id = o.id AND r.status IN ('requested', 'printing')`)
+  // Placed requests that were left out of the list go after the dragged ones.
+  await db.execute(sql`
+    UPDATE print_requests SET position = NULL, updated_at = now()
+    WHERE position IS NOT NULL AND NOT (id = ANY(${sql.param(orderedIds)}::uuid[]))`)
+}
+
+/** Back to priority, due date and age. */
+export async function clearQueueOrder(db: Database): Promise<void> {
+  await db.execute(
+    sql`UPDATE print_requests SET position = NULL, updated_at = now() WHERE position IS NOT NULL`,
+  )
+}
+
+/*
+ * Twelve characters from a lookalike-free alphabet: short enough to type off
+ * a sticky note, and at ~68 bits still far beyond guessing. The page behind it
+ * shows one request's progress and nothing else.
+ */
+const shareToken = customAlphabet('23456789abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ', 12)
+
+/** The request's status link token, made on first use and stable after. */
+export async function requestShareToken(db: Database, requestId: string): Promise<string> {
+  const rows = await db.execute<{ share_token: string }>(sql`
+    UPDATE print_requests SET share_token = coalesce(share_token, ${shareToken()})
+    WHERE id = ${requestId} RETURNING share_token`)
+  const token = rows.rows[0]?.share_token
+  if (!token) throw new RequestValidationError('That request is no longer in the queue.')
+  return token
+}
+
+export interface RequestProgress {
+  request: PrintRequest
+  /** Open requests before it in the queue; null once it is not waiting. */
+  ahead: number | null
+  /**
+   * Minutes until it is likely done, printing back to back: what is ahead of
+   * it plus its own prints. Null when something on the way has no estimate.
+   */
+  readyInMin: number | null
+}
+
+/** What a requester's status link shows. */
+export async function requestProgressByToken(
+  db: Database,
+  token: string,
+): Promise<RequestProgress | null> {
+  if (!/^[0-9A-Za-z]{8,32}$/.test(token)) return null
+  const rows = await db.execute<Row>(sql`${SELECT_REQUEST} WHERE r.share_token = ${token} LIMIT 1`)
+  if (!rows.rows[0]) return null
+  const request = toRequest(rows.rows[0])
+  if (request.status === 'done' || request.status === 'cancelled') {
+    return { request, ahead: null, readyInMin: null }
+  }
+
+  const open = await listRequests(db, { status: ['requested', 'printing'], limit: 200 })
+  // The printer works through what is on it first, then the queue in order.
+  const ordered = [
+    ...open.filter((other) => other.status === 'printing'),
+    ...open.filter((other) => other.status === 'requested'),
+  ]
+  const index = ordered.findIndex((other) => other.id === request.id)
+  const upTo = index >= 0 ? ordered.slice(0, index + 1) : [request]
+  let readyInMin: number | null = 0
+  for (const other of upTo) {
+    const minutes = minutesLeft(other)
+    readyInMin = minutes == null || readyInMin == null ? null : readyInMin + minutes
+  }
+  return {
+    request,
+    ahead: request.status === 'requested' ? upTo.length - 1 : null,
+    readyInMin: readyInMin == null ? null : Math.round(readyInMin),
+  }
+}
+
+/** Printing time a request still needs, as the queue header counts it. */
+function minutesLeft(request: PrintRequest): number | null {
+  const left = Math.max(1, request.quantity - request.printsDone)
+  if (request.live?.remainingMin != null) {
+    if (left === 1) return request.live.remainingMin
+    return request.estimatedMin == null
+      ? null
+      : request.live.remainingMin + request.estimatedMin * (left - 1)
+  }
+  if (request.estimatedMin == null) return null
+  if (request.status === 'printing' && request.startedAt) {
+    const elapsed = (Date.now() - request.startedAt.getTime()) / 60_000
+    return Math.max(0, request.estimatedMin * left - elapsed)
+  }
+  return request.estimatedMin * left
 }
 
 /** Open requests against one model, for the "someone is waiting for this" note. */

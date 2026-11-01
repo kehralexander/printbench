@@ -7,7 +7,10 @@ import {
   modelFormatSql,
   modelGeometrySql,
   modelThumbnailSql,
+  printerSnapshots,
   printStats,
+  unratedPrints,
+  type PrinterSnapshot,
 } from '@pb/core'
 import { getSessionUser } from '@pb/auth'
 import { getDb } from '@pb/db'
@@ -17,6 +20,8 @@ import { Badge } from '@/components/ui/badge'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Button } from '@/components/ui/button'
 import { ModelCard, formatDimensions } from '@/components/model/model-card'
+import { ClockTime } from '@/components/ui/clock-time'
+import { UnratedPrints } from './prints/unrated-prints'
 
 export const dynamic = 'force-dynamic'
 
@@ -97,6 +102,53 @@ async function recentPrints(): Promise<RecentPrint[]> {
 
 const NUMBER = new Intl.NumberFormat('en-GB')
 
+/** A printer as the dashboard shows it, from the worker's last reading. */
+interface PrinterLine {
+  id: string
+  name: string
+  label: string
+  tone: 'accent' | 'danger' | 'neutral'
+  filename: string | null
+  percent: number | null
+  /** ISO; when a running print should finish. */
+  doneAt: string | null
+}
+
+/**
+ * Read from the snapshots the worker keeps, never from the printers: a
+ * switched-off printer must not hold up the page everyone lands on.
+ */
+async function printerLines(): Promise<PrinterLine[]> {
+  const snapshots = await printerSnapshots(getDb())
+  return snapshots.map(printerLine)
+}
+
+function printerLine(printer: PrinterSnapshot): PrinterLine {
+  const status = printer.fresh ? printer.status : null
+  const base = { id: printer.id, name: printer.name, filename: null, percent: null, doneAt: null }
+  if (!status)
+    return {
+      ...base,
+      label: printer.status ? 'No recent reading' : 'Not read yet',
+      tone: 'neutral',
+    }
+  if (status.state === 'offline' || status.state === 'error') {
+    return { ...base, label: status.state === 'offline' ? 'Offline' : 'Error', tone: 'danger' }
+  }
+  if (!status.busy) return { ...base, label: 'Idle', tone: 'neutral' }
+  return {
+    ...base,
+    label: status.state === 'paused' ? 'Paused' : 'Printing',
+    tone: 'accent',
+    filename: status.filename?.split('/').pop() ?? null,
+    percent: status.progress != null ? Math.round(status.progress * 100) : null,
+    doneAt:
+      status.state === 'printing' && status.remainingSec != null
+        ? new Date(Date.now() + status.remainingSec * 1000).toISOString()
+        : null,
+  }
+}
+
 function Stat({
   label,
   value,
@@ -143,7 +195,9 @@ export default async function DashboardPage() {
 
   const canQueue = can(policyUser, 'request:create')
 
-  const [stats, prints, models, latestPrints, queued] = await Promise.all([
+  const canRate = can(policyUser, 'print:log')
+
+  const [stats, prints, models, latestPrints, queued, printers, unrated] = await Promise.all([
     counts(),
     printStats(getDb()),
     recentModels(),
@@ -156,6 +210,8 @@ export default async function DashboardPage() {
     canQueue
       ? listRequests(getDb(), { status: ['requested', 'printing'], limit: 5 })
       : Promise.resolve([]),
+    printerLines(),
+    canRate ? unratedPrints(getDb(), 3) : Promise.resolve([]),
   ])
 
   return (
@@ -189,6 +245,64 @@ export default async function DashboardPage() {
           href={canManage ? '/admin/libraries' : undefined}
         />
       </div>
+
+      <UnratedPrints
+        prints={unrated.map((print) => ({
+          ...print,
+          finishedAt: print.finishedAt?.toISOString() ?? null,
+        }))}
+      />
+
+      {printers.length > 0 && (
+        <section className="mb-8">
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="text-sm font-semibold">Printers</h2>
+            <Link href="/printers" className="text-sm text-[var(--color-accent)] hover:underline">
+              Printer status
+            </Link>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {printers.map((printer) => (
+              <Card
+                key={printer.id}
+                className="transition-shadow hover:shadow-[var(--shadow-card)]"
+              >
+                <Link href="/printers" className="block space-y-2 p-4">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="truncate text-sm font-medium">{printer.name}</span>
+                    <Badge tone={printer.tone}>{printer.label}</Badge>
+                  </div>
+                  {printer.filename && (
+                    <p
+                      className="truncate text-xs text-[var(--color-ink-muted)]"
+                      title={printer.filename}
+                    >
+                      {printer.filename}
+                    </p>
+                  )}
+                  {printer.percent != null && (
+                    <div className="flex items-center gap-2">
+                      <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-[var(--color-surface-2)]">
+                        <div
+                          className="h-full rounded-full bg-[var(--color-accent)]"
+                          style={{ width: `${printer.percent}%` }}
+                        />
+                      </div>
+                      <span className="text-xs font-medium tabular-nums">{printer.percent}%</span>
+                    </div>
+                  )}
+                  {printer.doneAt && (
+                    <p className="text-xs text-[var(--color-ink-muted)]">
+                      Done around <ClockTime value={printer.doneAt} />
+                    </p>
+                  )}
+                </Link>
+              </Card>
+            ))}
+          </div>
+        </section>
+      )}
 
       {queued.length > 0 && (
         <section className="mb-8">

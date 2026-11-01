@@ -5,12 +5,31 @@ import path from 'node:path'
 import { sql } from 'drizzle-orm'
 import { createDb } from '@pb/db'
 import type { PrinterStatus } from './printer-status'
-import { outcomeOf, printerSnapshots, trackPrinter } from './printer-tracking'
+import {
+  dismissJob,
+  linkJobToModel,
+  outcomeOf,
+  printerSnapshots,
+  relinkUnmatchedJobs,
+  trackPrinter,
+  unmatchedJobs,
+} from './printer-tracking'
+import { printOutcomeStats } from './print-outcomes'
+import {
+  dismissReview,
+  readPrintPhoto,
+  reviewPrint,
+  setPrintPhoto,
+  unratedPrints,
+} from './print-reviews'
 import {
   createRequest,
   getRequest,
   listRequests,
   queueStats,
+  reorderRequests,
+  requestProgressByToken,
+  requestShareToken,
   setRequestStatus,
 } from './request-service'
 
@@ -63,6 +82,8 @@ describe('printer tracking', { tags: ['integration'] }, () => {
     ;({ pool, db } = createDb())
     await cleanup()
     root = await mkdtemp(path.join(tmpdir(), 'pb-tracking-'))
+    // Print photos go under DATA_DIR.
+    process.env.DATA_DIR = path.join(root, 'data')
     await mkdir(path.join(root, 'Benchy'))
     const gcode = 'G28\n; total filament used [g] = 12.3\n'
     await writeFile(path.join(root, 'Benchy', 'benchy_plate.gcode'), gcode)
@@ -84,6 +105,7 @@ describe('printer tracking', { tags: ['integration'] }, () => {
     await db.execute(sql`DELETE FROM print_requests`)
     await db.execute(sql`DELETE FROM print_runs WHERE model_id = ${MODEL}`)
     await db.execute(sql`DELETE FROM print_hosts WHERE id = ${HOST}`)
+    await db.execute(sql`DELETE FROM model_files WHERE model_id = ${MODEL} AND id <> ${plateId}`)
     await db.execute(sql`
       INSERT INTO print_hosts (id, name, protocol, endpoint)
       VALUES (${HOST}, 'Kobra X', 'moonraker', 'http://kx-bridge:7125')`)
@@ -265,6 +287,133 @@ describe('printer tracking', { tags: ['integration'] }, () => {
     expect(row?.live).toEqual({ printerName: 'Kobra X', progress: 0.25, remainingMin: 60 })
     const [snapshot] = (await printerSnapshots(db)).filter((p) => p.id === HOST)
     expect(snapshot).toMatchObject({ fresh: true, status: { state: 'printing', progress: 0.25 } })
+  })
+
+  it('files a job the library did not know under a model later, with its history', async () => {
+    await trackPrinter(db, printer, printing('cube.gcode', 0.5, 5), at(5))
+    await trackPrinter(db, printer, complete('cube.gcode', 10), at(11))
+    await trackPrinter(db, printer, printing('cube.gcode', 0.3, 3), at(20))
+    await trackPrinter(db, printer, idle, at(21))
+    const unmatched = await unmatchedJobs(db)
+    expect(unmatched.map((job) => job.status)).toEqual(['cancelled', 'success'])
+    expect(await runs()).toHaveLength(0)
+
+    // Linking one files every print of that file.
+    expect(await linkJobToModel(db, unmatched[1]!.id, MODEL)).toBe(2)
+    expect(await unmatchedJobs(db)).toEqual([])
+    expect(await runs()).toMatchObject([
+      {
+        status: 'success',
+        printer_name: 'Kobra X',
+        duration_min: 10,
+        notes: 'Printed on Kobra X.',
+      },
+      { status: 'failed', notes: 'Cancelled on Kobra X at 30%.' },
+    ])
+  })
+
+  it('links a job once its file turns up in the library, and forgets dismissed ones', async () => {
+    await trackPrinter(db, printer, printing('later.gcode', 0.5, 5), at(5))
+    await trackPrinter(db, printer, complete('later.gcode', 9), at(10))
+    await trackPrinter(db, printer, printing('junk.gcode', 0.1, 1), at(20))
+    await trackPrinter(db, printer, idle, at(21))
+    const junk = (await unmatchedJobs(db)).find((job) => job.filename === 'junk.gcode')!
+    await dismissJob(db, junk.id)
+    expect((await unmatchedJobs(db)).map((job) => job.filename)).toEqual(['later.gcode'])
+
+    expect(await relinkUnmatchedJobs(db)).toBe(0)
+    await db.execute(sql`
+      INSERT INTO model_files (model_id, filename, extension, category, size)
+      VALUES (${MODEL}, 'later.gcode', 'gcode', 'slicer', 10)`)
+    expect(await relinkUnmatchedJobs(db)).toBe(1)
+    expect(await runs()).toMatchObject([{ status: 'success', duration_min: 9 }])
+    expect(await unmatchedJobs(db)).toEqual([])
+  })
+
+  it('gives a print to the request dragged to the top of the queue', async () => {
+    const first = await request()
+    const second = await request()
+    await reorderRequests(db, [second.id, first.id])
+    expect((await listRequests(db, { status: ['requested'] })).map((r) => r.id)).toEqual([
+      second.id,
+      first.id,
+    ])
+    await trackPrinter(db, printer, printing('benchy_plate.gcode', 0.05, 2), at(2))
+    expect((await getRequest(db, second.id))?.status).toBe('printing')
+    expect((await getRequest(db, first.id))?.status).toBe('requested')
+  })
+
+  it('shows a requester how far along their request is', async () => {
+    const first = await request(1, 60)
+    const mine = await request(1, 30)
+    const token = await requestShareToken(db, mine.id)
+    expect(await requestShareToken(db, mine.id)).toBe(token)
+    expect(await requestProgressByToken(db, 'nothing-here')).toBeNull()
+
+    expect(await requestProgressByToken(db, token)).toMatchObject({ ahead: 1, readyInMin: 90 })
+
+    // The one ahead goes on the printer with 20 minutes left.
+    await trackPrinter(db, printer, printing('benchy_plate.gcode', 0.6, 40, 20))
+    expect((await getRequest(db, first.id))?.status).toBe('printing')
+    // Still one ahead of it — the one on the printer — but nearer.
+    expect(await requestProgressByToken(db, token)).toMatchObject({ ahead: 1, readyInMin: 50 })
+
+    await setRequestStatus(db, mine.id, 'done')
+    expect(await requestProgressByToken(db, token)).toMatchObject({
+      request: { status: 'done' },
+      ahead: null,
+    })
+  })
+
+  it('asks how a logged print went until it is rated or waved off', async () => {
+    await request()
+    await trackPrinter(db, printer, printing('benchy_plate.gcode', 0.5, 40), at(40))
+    await trackPrinter(db, printer, complete('benchy_plate.gcode', 80), at(81))
+    let [unrated] = await unratedPrints(db)
+    expect(unrated).toMatchObject({
+      modelName: 'Benchy',
+      printerName: 'Kobra X',
+      status: 'success',
+    })
+
+    await reviewPrint(db, unrated!.id, { rating: 2, note: 'Stringy.', failed: true })
+    expect(await unratedPrints(db)).toEqual([])
+    expect(await runs()).toMatchObject([
+      { status: 'failed', notes: 'Printed on Kobra X, for Sam.\nStringy.' },
+    ])
+    await expect(reviewPrint(db, unrated!.id, { rating: 9 })).rejects.toThrow('one to five')
+
+    await trackPrinter(db, printer, printing('benchy_plate.gcode', 0.5, 40), at(100))
+    await trackPrinter(db, printer, complete('benchy_plate.gcode', 80), at(181))
+    ;[unrated] = await unratedPrints(db)
+    await dismissReview(db, unrated!.id)
+    expect(await unratedPrints(db)).toEqual([])
+  })
+
+  it('keeps a photo of a print, and only an image', async () => {
+    await trackPrinter(db, printer, printing('benchy_plate.gcode', 0.5, 40), at(40))
+    await trackPrinter(db, printer, complete('benchy_plate.gcode', 80), at(81))
+    const [print] = await unratedPrints(db)
+    const png = Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      Buffer.from('rest'),
+    ])
+    await setPrintPhoto(db, print!.id, png)
+    expect(await readPrintPhoto(db, print!.id)).toEqual({ data: png, contentType: 'image/png' })
+    await expect(setPrintPhoto(db, print!.id, Buffer.from('<svg/>'))).rejects.toThrow('JPEG')
+    expect((await unratedPrints(db))[0]?.hasPhoto).toBe(true)
+  })
+
+  it('counts success rates and where failed prints stop', async () => {
+    await trackPrinter(db, printer, printing('benchy_plate.gcode', 0.5, 40), at(40))
+    await trackPrinter(db, printer, complete('benchy_plate.gcode', 80), at(81))
+    await trackPrinter(db, printer, printing('benchy_plate.gcode', 0.08, 5), at(100))
+    await trackPrinter(db, printer, idle, at(101))
+    const stats = await printOutcomeStats(db)
+    const benchy = stats.byModel.find((row) => row.label === 'Benchy')
+    expect(benchy).toMatchObject({ total: 2, successes: 1, failures: 1, successRate: 0.5 })
+    expect(benchy?.typicalFailureAt).toBeCloseTo(0.08)
+    expect(stats.byFile.find((row) => row.label === 'benchy_plate.gcode · Benchy')?.total).toBe(2)
   })
 
   it('judges a silent end by progress', () => {

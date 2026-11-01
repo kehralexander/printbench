@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm'
-import { index, integer, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core'
+import { index, integer, pgTable, text, timestamp, uniqueIndex, uuid } from 'drizzle-orm/pg-core'
 import { printRequestPriority, printRequestStatus } from './enums'
 import { user } from './auth'
 import { modelFiles, models } from './models'
@@ -78,6 +78,13 @@ export const printRequests = pgTable(
     printsDone: integer('prints_done').notNull().default(0),
     /** The printer job it is on right now, while one is. */
     printerJobId: uuid('printer_job_id'),
+    /**
+     * A manual place in the queue, set by dragging. Lower comes first; null
+     * falls back to priority, due date and age after the placed ones.
+     */
+    position: integer('position'),
+    /** The short link a requester can follow to see how it is going. */
+    shareToken: text('share_token'),
 
     /**
      * The print history entry created when this was marked printed.
@@ -106,6 +113,9 @@ export const printRequests = pgTable(
       .on(t.modelId)
       .where(sql`${t.modelId} IS NOT NULL`),
     index('print_requests_creator_idx').on(t.createdBy),
+    uniqueIndex('print_requests_share_token_idx')
+      .on(t.shareToken)
+      .where(sql`${t.shareToken} IS NOT NULL`),
     // Only ever looked up from a request that has one, and most never will.
     index('print_requests_print_run_idx')
       .on(t.printRunId)

@@ -1,6 +1,6 @@
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
-import { getSessionUser, OIDC_PROVIDER_ID, ssoProviderName } from '@pb/auth'
+import { getSessionUser, OIDC_PROVIDER_ID, SSO_NOT_ALLOWED, ssoProviderName } from '@pb/auth'
 import { needsFirstRunSetup } from '@/lib/setup'
 import { LoginForm } from './login-form'
 import { SsoButton } from './sso-button'
@@ -12,6 +12,9 @@ function ssoErrorMessage(code: string | undefined, provider: string): string | n
   if (!code) return null
   if (code === 'signup_disabled') {
     return `Your ${provider} account has no PrintBench account yet. Ask an admin to invite you.`
+  }
+  if (code === SSO_NOT_ALLOWED) {
+    return `Your ${provider} account is not in a group allowed to use PrintBench. Ask an admin to add you.`
   }
   return `Signing in with ${provider} did not work (${code}).`
 }

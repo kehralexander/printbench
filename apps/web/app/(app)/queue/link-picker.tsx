@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState, useTransition } from 'react'
-import { Link2, Link2Off, Loader2, Search } from 'lucide-react'
+import { Link2, Link2Off, Loader2, Search, type LucideIcon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -20,12 +20,20 @@ export function LinkPicker({
   suggestQuery,
   onLink,
   pending,
+  label = 'Link to library',
+  icon: Icon = Link2,
+  hint,
 }: {
   linkedName: string | null
   /** The request's own title — the obvious first thing to search for. */
   suggestQuery: string
   onLink: (modelId: string | null) => void
   pending: boolean
+  /** The button's text when nothing is linked yet. */
+  label?: string
+  icon?: LucideIcon
+  /** A line above the search saying what picking a model will do. */
+  hint?: string
 }) {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState(suggestQuery)
@@ -82,14 +90,15 @@ export function LinkPicker({
           disabled={pending}
           // The label is hidden on a narrow screen, so name the button outright
           // rather than leaving a bare icon.
-          aria-label={linkedName ? `Change the link from ${linkedName}` : 'Link to library'}
+          aria-label={linkedName ? `Change the link from ${linkedName}` : label}
         >
-          <Link2 />
-          <span className="hidden sm:inline">{linkedName ? 'Change link' : 'Link to library'}</span>
+          <Icon />
+          <span className="hidden sm:inline">{linkedName ? 'Change link' : label}</span>
         </Button>
       </PopoverTrigger>
 
       <PopoverContent className="w-80 p-2">
+        {hint && <p className="mb-2 px-1 text-xs text-[var(--color-ink-muted)]">{hint}</p>}
         <div className="relative">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-[var(--color-ink-faint)]" />
           <Input

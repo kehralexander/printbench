@@ -6,6 +6,7 @@ import Link from 'next/link'
 import {
   Check,
   CircleSlash,
+  GripVertical,
   Play,
   Printer,
   RotateCcw,
@@ -27,6 +28,7 @@ import { ClockTime } from '@/components/ui/clock-time'
 import { LinkPicker } from './link-picker'
 import { RequestEditor } from './request-editor'
 import { SendButton } from './send-button'
+import { ShareStatus } from './share-status'
 import { removeRequest, setRequestModel, setStatus } from './actions'
 
 export interface SpoolBadge {
@@ -41,6 +43,32 @@ export interface SendTarget {
   id: string
   name: string
   busy: boolean
+}
+
+/** Drag-to-reorder wiring for a row, from the list around it. */
+export interface RowDrag {
+  dragging: boolean
+  disabled: boolean
+  onDragStart: () => void
+  onDragEnter: () => void
+  onDragEnd: () => void
+  /** Keyboard: one place up (-1) or down (+1). */
+  onMove: (delta: number) => void
+}
+
+/** Where the spool this asks for runs dry, when it does before this one. */
+export interface SpoolShortfall {
+  spoolId: number
+  /** Queued prints the spool still covers. */
+  after: number
+  /** Queued prints on the spool in all. */
+  of: number
+}
+
+/** What an idle printer could start next, shown on the row it points at. */
+export interface NextHint {
+  printerName: string
+  slotIndex: number | null
 }
 
 export interface QueueRow {
@@ -73,6 +101,10 @@ export interface QueueRow {
   loaded: LoadedVerdict | null
   /** The chosen file is sliced output a printer accepts. */
   sendable: boolean
+  /** The spool will not stretch to this one, given everything before it. */
+  shortfall: SpoolShortfall | null
+  /** An idle printer could start this one now, with what it has loaded. */
+  nextOn: NextHint[]
   /** ISO strings: Dates do not need to survive the round trip, only render. */
   dueAt: string | null
   createdAt: string
@@ -106,12 +138,15 @@ export function RequestRow({
   canRun,
   filaments,
   sendTargets,
+  drag,
 }: {
   request: QueueRow
   canRun: boolean
   filaments: FilamentOption[]
   /** Printers to offer Send & start for; empty when the user may not send. */
   sendTargets: SendTarget[]
+  /** Set when the row can be dragged to a new place in the queue. */
+  drag?: RowDrag
 }) {
   const router = useRouter()
   const [error, setError] = useState<string | null>(null)
@@ -175,7 +210,42 @@ export function RequestRow({
   ].filter(Boolean) as string[]
 
   return (
-    <li className={cn('flex flex-wrap items-start gap-3 px-4 py-3', closed && 'opacity-60')}>
+    <li
+      className={cn(
+        'flex flex-wrap items-start gap-3 px-4 py-3',
+        closed && 'opacity-60',
+        drag?.dragging && 'bg-[var(--color-accent-soft)] opacity-70',
+      )}
+      draggable={drag != null && !drag.disabled}
+      onDragStart={
+        drag
+          ? (event) => {
+              event.dataTransfer.effectAllowed = 'move'
+              drag.onDragStart()
+            }
+          : undefined
+      }
+      onDragEnter={drag ? () => drag.onDragEnter() : undefined}
+      onDragOver={drag ? (event) => event.preventDefault() : undefined}
+      onDragEnd={drag ? () => drag.onDragEnd() : undefined}
+    >
+      {drag && (
+        <button
+          type="button"
+          disabled={drag.disabled}
+          className="-ml-2 flex h-10 cursor-grab items-center text-[var(--color-ink-faint)] hover:text-[var(--color-ink)] active:cursor-grabbing"
+          aria-label={`Move ${request.title}: drag, or use the arrow keys`}
+          title="Drag to reorder"
+          onKeyDown={(event) => {
+            if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+              event.preventDefault()
+              drag.onMove(event.key === 'ArrowUp' ? -1 : 1)
+            }
+          }}
+        >
+          <GripVertical className="size-4" />
+        </button>
+      )}
       {request.thumbFileId ? (
         // eslint-disable-next-line @next/next/no-img-element
         <img
@@ -255,6 +325,13 @@ export function RequestRow({
                 · not enough for {left > 1 ? `all ${left}` : 'this'} (needs ~{neededG} g)
               </span>
             )}
+            {!short && request.shortfall && (
+              <span className="text-[var(--color-danger)]">
+                {' '}
+                · runs out before this one, after {request.shortfall.after} of the{' '}
+                {request.shortfall.of} queued prints on it
+              </span>
+            )}
           </p>
         )}
 
@@ -293,6 +370,19 @@ export function RequestRow({
 
         {request.loaded && request.status === 'requested' && (
           <LoadedHint verdict={request.loaded} />
+        )}
+
+        {request.nextOn.length > 0 && request.status === 'requested' && (
+          <p className="mt-0.5 text-xs font-medium text-[var(--color-accent)]">
+            Next up:{' '}
+            {request.nextOn
+              .map((hint) =>
+                hint.slotIndex != null
+                  ? `${hint.printerName} is idle with it in slot ${hint.slotIndex + 1}`
+                  : `${hint.printerName} is idle`,
+              )
+              .join('; ')}
+          </p>
         )}
 
         {request.notes && (
@@ -392,6 +482,15 @@ export function RequestRow({
             )}
 
             {canEdit && <RequestEditor request={request} filaments={filaments} pending={pending} />}
+
+            {canEdit && (
+              <ShareStatus
+                requestId={request.id}
+                title={request.title}
+                disabled={pending}
+                onError={setError}
+              />
+            )}
 
             {canEdit && (
               <LinkPicker
