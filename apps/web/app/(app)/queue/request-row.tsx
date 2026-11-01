@@ -22,6 +22,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/cn'
 import type { FilamentOption } from '@/lib/filament-options'
+import { ClockTime } from '@/components/ui/clock-time'
 import { LinkPicker } from './link-picker'
 import { RequestEditor } from './request-editor'
 import { removeRequest, setRequestModel, setStatus } from './actions'
@@ -378,23 +379,5 @@ export function RequestRow({
         )}
       </div>
     </li>
-  )
-}
-
-/**
- * A time of day in the reader's zone ("14:30", or "Tue 14:30" when not today).
- * The server renders in UTC, hence the suppressed hydration warning.
- */
-function ClockTime({ value }: { value: string }) {
-  const date = new Date(value)
-  const today = new Date().toDateString() === date.toDateString()
-  return (
-    <time dateTime={value} suppressHydrationWarning>
-      {date.toLocaleString(undefined, {
-        ...(today ? {} : { weekday: 'short' }),
-        hour: '2-digit',
-        minute: '2-digit',
-      })}
-    </time>
   )
 }
