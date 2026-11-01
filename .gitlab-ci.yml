@@ -1,0 +1,72 @@
+# Builds the container image (docker/Dockerfile) with rootless Podman and
+# pushes it to this project's GitLab Container Registry. Mirrors the image
+# build in .github/workflows; the lint/test jobs stay on GitHub for now.
+#
+# Tags pushed:
+#   every pipeline   :<short sha>
+#   merge requests   :mr-<iid>
+#   default branch   :main
+#   vX.Y.Z[-pre]     :X.Y.Z, plus :X.Y, :X and :latest for non-prereleases
+#                    (same scheme as the GitHub release workflow)
+#
+# Podman runs inside the job container; STORAGE_DRIVER and BUILDAH_ISOLATION
+# let that work on a plain, non-privileged runner (see sonic-webgui).
+
+stages:
+  - build
+
+default:
+  tags:
+    - high-performance
+
+# Avoids a branch pipeline and a merge-request pipeline for the same commit.
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_COMMIT_TAG'
+
+build-image:
+  stage: build
+  image:
+    name: quay.io/podman/stable
+    entrypoint: [""]
+  variables:
+    # vfs avoids needing overlayfs inside an unprivileged container; chroot
+    # isolation avoids needing user/mount namespaces for RUN steps.
+    STORAGE_DRIVER: vfs
+    BUILDAH_ISOLATION: chroot
+  script:
+    # The context is the repo root: the build copies every workspace package.
+    - >
+      podman build -f docker/Dockerfile
+      --label "org.opencontainers.image.title=PrintBench"
+      --label "org.opencontainers.image.source=$CI_PROJECT_URL"
+      --label "org.opencontainers.image.revision=$CI_COMMIT_SHA"
+      --label "org.opencontainers.image.licenses=MIT"
+      -t "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA" .
+    - podman login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
+    - |
+      tags=""
+      if [ -n "$CI_MERGE_REQUEST_IID" ]; then
+        tags="mr-$CI_MERGE_REQUEST_IID"
+      elif [ -n "$CI_COMMIT_TAG" ]; then
+        version="${CI_COMMIT_TAG#v}"
+        tags="$version"
+        case "$version" in
+          *-*) ;; # prerelease: only the exact version
+          *)
+            major="${version%%.*}"
+            rest="${version#*.}"
+            tags="$tags $major.${rest%%.*} $major latest"
+            ;;
+        esac
+      elif [ "$CI_COMMIT_BRANCH" = "$CI_DEFAULT_BRANCH" ]; then
+        tags="main"
+      fi
+      for tag in $tags; do
+        podman tag "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA" "$CI_REGISTRY_IMAGE:$tag"
+      done
+      for tag in $CI_COMMIT_SHORT_SHA $tags; do
+        podman push "$CI_REGISTRY_IMAGE:$tag"
+      done
