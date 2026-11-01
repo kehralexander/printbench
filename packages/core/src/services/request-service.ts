@@ -1014,6 +1014,27 @@ export async function requestProgressByToken(
   }
 }
 
+/**
+ * The preview-store key of a thumbnail the status page may show: one of the
+ * requested model's files, reached through the request's own share token.
+ * Anything else, including a file of some other model, is null.
+ */
+export async function requestThumbKeyByToken(
+  db: Database,
+  token: string,
+  fileId: string,
+): Promise<string | null> {
+  if (!/^[0-9A-Za-z]{8,32}$/.test(token) || !/^[0-9a-f-]{36}$/i.test(fileId)) return null
+  const rows = await db.execute<{ thumb_key: string }>(sql`
+    SELECT f.thumb_key
+    FROM print_requests r
+    JOIN model_files f ON f.model_id = r.model_id
+    WHERE r.share_token = ${token} AND f.id = ${fileId}
+      AND f.thumb_state = 'ok' AND f.thumb_key IS NOT NULL AND f.missing_at IS NULL
+    LIMIT 1`)
+  return rows.rows[0]?.thumb_key ?? null
+}
+
 /** Printing time a request still needs, as the queue header counts it. */
 function minutesLeft(request: PrintRequest): number | null {
   const left = Math.max(1, request.quantity - request.printsDone)

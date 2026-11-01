@@ -1,5 +1,5 @@
 import { notFound } from 'next/navigation'
-import { CircleSlash, PackageCheck, Printer, Hourglass } from 'lucide-react'
+import { Box, CircleSlash, PackageCheck, Printer, Hourglass } from 'lucide-react'
 import { formatEstimate, getSettings, requestProgressByToken } from '@pb/core'
 import { getDb } from '@pb/db'
 import { AutoRefresh } from '@/components/ui/auto-refresh'
@@ -50,6 +50,19 @@ export default async function RequestStatusPage({
     <main className="mx-auto max-w-md px-5 py-10">
       {request.status !== 'done' && request.status !== 'cancelled' && (
         <AutoRefresh intervalMs={REFRESH_MS} />
+      )}
+      {/* The model's own picture says what is being made faster than its name. */}
+      {request.thumbFileId ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={`/r/${token}/thumb/${request.thumbFileId}`}
+          alt=""
+          className="mb-5 size-24 rounded-[var(--radius-card)] bg-[var(--color-surface-2)] object-cover"
+        />
+      ) : (
+        <span className="mb-5 flex size-24 items-center justify-center rounded-[var(--radius-card)] bg-[var(--color-surface-2)]">
+          <Box className="size-8 text-[var(--color-ink-faint)]" />
+        </span>
       )}
       <PageHeader
         eyebrow={`Print request · ${siteName}`}
