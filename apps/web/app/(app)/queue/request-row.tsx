@@ -13,11 +13,17 @@ import {
   Undo2,
   type LucideIcon,
 } from 'lucide-react'
-import type { PrintRequestPriority, PrintRequestStatus } from '@pb/core/requests'
+import {
+  formatEstimate,
+  type PrintRequestPriority,
+  type PrintRequestStatus,
+} from '@pb/core/requests'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/cn'
+import type { FilamentOption } from '@/lib/filament-options'
 import { LinkPicker } from './link-picker'
+import { RequestEditor } from './request-editor'
 import { removeRequest, setRequestModel, setStatus } from './actions'
 
 export interface QueueRow {
@@ -30,11 +36,18 @@ export interface QueueRow {
   status: PrintRequestStatus
   material: string | null
   colorHex: string | null
+  colorName: string | null
+  /** Minutes for one print. */
+  estimatedMin: number | null
+  /** ISO; set while it is on the printer. */
+  startedAt: string | null
   /** ISO strings: Dates do not need to survive the round trip, only render. */
   dueAt: string | null
   createdAt: string
   /** Set once marking it printed has written it to the print history. */
   printRunId: string | null
+  modelId: string | null
+  modelFileId: string | null
   modelPublicId: string | null
   modelName: string | null
   modelMissing: boolean
@@ -56,7 +69,15 @@ const STATUS_META: Record<PrintRequestStatus, { label: string; icon: LucideIcon;
     cancelled: { label: 'Cancelled', icon: CircleSlash, class: 'text-[var(--color-ink-faint)]' },
   }
 
-export function RequestRow({ request, canRun }: { request: QueueRow; canRun: boolean }) {
+export function RequestRow({
+  request,
+  canRun,
+  filaments,
+}: {
+  request: QueueRow
+  canRun: boolean
+  filaments: FilamentOption[]
+}) {
   const router = useRouter()
   const [error, setError] = useState<string | null>(null)
   const [pending, startTransition] = useTransition()
@@ -86,10 +107,19 @@ export function RequestRow({ request, canRun }: { request: QueueRow; canRun: boo
     })
   }
 
+  const look = [request.material, request.colorName].filter(Boolean).join(' · ')
+  const estimate =
+    request.estimatedMin != null
+      ? request.quantity > 1
+        ? `~${formatEstimate(request.estimatedMin * request.quantity)} (${request.quantity} × ${formatEstimate(request.estimatedMin)})`
+        : `~${formatEstimate(request.estimatedMin)}`
+      : null
+
   const details = [
     request.requestedBy && `for ${request.requestedBy}`,
-    request.material,
+    look,
     request.filename,
+    !closed && estimate,
     request.dueAt &&
       `${overdue ? 'was due' : 'due'} ${new Date(request.dueAt).toLocaleDateString('en-GB', {
         day: 'numeric',
@@ -123,7 +153,7 @@ export function RequestRow({ request, canRun }: { request: QueueRow; canRun: boo
           {overdue && <Badge tone="danger">Overdue</Badge>}
           {request.colorHex && (
             <span
-              title={request.colorHex}
+              title={request.colorName ?? request.colorHex}
               className="size-3 rounded-full ring-1 ring-inset ring-[var(--color-border)]"
               style={{ backgroundColor: request.colorHex }}
             />
@@ -155,8 +185,27 @@ export function RequestRow({ request, canRun }: { request: QueueRow; canRun: boo
           )}
         </p>
 
+        {request.status === 'printing' && request.startedAt && (
+          <p className="mt-0.5 text-xs text-[var(--color-ink-muted)]">
+            On the printer since <ClockTime value={request.startedAt} />
+            {request.estimatedMin != null && (
+              <>
+                {' · done around '}
+                <ClockTime
+                  value={new Date(
+                    new Date(request.startedAt).getTime() +
+                      request.estimatedMin * request.quantity * 60_000,
+                  ).toISOString()}
+                />
+              </>
+            )}
+          </p>
+        )}
+
         {request.notes && (
-          <p className="mt-1 line-clamp-2 text-sm text-[var(--color-ink-muted)]">{request.notes}</p>
+          <p className="mt-1 line-clamp-3 whitespace-pre-line text-sm text-[var(--color-ink-muted)]">
+            {request.notes}
+          </p>
         )}
 
         {error && <p className="mt-1 text-xs text-[var(--color-danger)]">{error}</p>}
@@ -234,6 +283,8 @@ export function RequestRow({ request, canRun }: { request: QueueRow; canRun: boo
               </Button>
             )}
 
+            {canEdit && <RequestEditor request={request} filaments={filaments} pending={pending} />}
+
             {canEdit && (
               <LinkPicker
                 linkedName={request.modelName}
@@ -279,5 +330,23 @@ export function RequestRow({ request, canRun }: { request: QueueRow; canRun: boo
         )}
       </div>
     </li>
+  )
+}
+
+/**
+ * A time of day in the reader's zone ("14:30", or "Tue 14:30" when not today).
+ * The server renders in UTC, hence the suppressed hydration warning.
+ */
+function ClockTime({ value }: { value: string }) {
+  const date = new Date(value)
+  const today = new Date().toDateString() === date.toDateString()
+  return (
+    <time dateTime={value} suppressHydrationWarning>
+      {date.toLocaleString(undefined, {
+        ...(today ? {} : { weekday: 'short' }),
+        hour: '2-digit',
+        minute: '2-digit',
+      })}
+    </time>
   )
 }

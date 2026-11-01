@@ -52,6 +52,18 @@ export const printRequests = pgTable(
     /** Asked-for material and colour — "in red PLA" is half of most requests. */
     material: text('material'),
     colorHex: text('color_hex'),
+    /** "Galaxy Black" — the hex alone renders a dot but reads as nothing. */
+    colorName: text('color_name'),
+
+    /**
+     * Expected printing time for ONE print, in minutes; the queue multiplies by
+     * quantity. Typed in, or pre-filled from the slicer's estimate in a linked
+     * G-code file or from earlier prints of the model — never recomputed over
+     * a value someone entered.
+     */
+    estimatedMin: integer('estimated_min'),
+    /** When it went on the printer. Gives "done around" and a real duration. */
+    startedAt: timestamp('started_at', { withTimezone: true }),
 
     /**
      * The print history entry created when this was marked printed.

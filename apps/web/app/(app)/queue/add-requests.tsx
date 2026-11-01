@@ -9,7 +9,9 @@ import { Card } from '@/components/ui/card'
 import { Field } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
+import type { FilamentOption } from '@/lib/filament-options'
 import { addRequests } from './actions'
+import { MaterialPicker, NO_MATERIAL, materialInput } from './request-fields'
 
 /**
  * Adding a batch.
@@ -23,13 +25,23 @@ import { addRequests } from './actions'
  * rules the user cannot see are rules they cannot trust. Showing the split
  * before it is saved turns "x4" from a guess into something they watched work.
  */
-export function AddRequests({ requesterSuggestions }: { requesterSuggestions: string[] }) {
+export function AddRequests({
+  requesterSuggestions,
+  filaments,
+}: {
+  requesterSuggestions: string[]
+  filaments: FilamentOption[]
+}) {
   const router = useRouter()
   const [open, setOpen] = useState(false)
   const [text, setText] = useState('')
   const [requestedBy, setRequestedBy] = useState('')
   const [priority, setPriority] = useState<PrintRequestPriority>('normal')
   const [dueAt, setDueAt] = useState('')
+  const [notes, setNotes] = useState('')
+  const [material, setMaterial] = useState(NO_MATERIAL)
+  /** Remounts the picker after a submit, so it shows the cleared value. */
+  const [pickerKey, setPickerKey] = useState(0)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [pending, startTransition] = useTransition()
@@ -48,6 +60,8 @@ export function AddRequests({ requesterSuggestions }: { requesterSuggestions: st
         requestedBy,
         priority,
         dueAt: dueAt || null,
+        notes: notes.trim() || null,
+        ...materialInput(material),
       })
 
       if (!result.ok) {
@@ -58,6 +72,9 @@ export function AddRequests({ requesterSuggestions }: { requesterSuggestions: st
       setNotice(summarise(result.created, result.autoLinked, result.skipped))
       setText('')
       setDueAt('')
+      setNotes('')
+      setMaterial(NO_MATERIAL)
+      setPickerKey((key) => key + 1)
       // The requester is kept: a batch is usually the start of a conversation
       // with one person, not the end of it.
       router.refresh()
@@ -148,6 +165,24 @@ export function AddRequests({ requesterSuggestions }: { requesterSuggestions: st
               type="date"
               value={dueAt}
               onChange={(event) => setDueAt(event.target.value)}
+            />
+          </Field>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <MaterialPicker
+            key={pickerKey}
+            value={material}
+            onChange={setMaterial}
+            options={filaments}
+          />
+          <Field label="Notes" htmlFor="queue-notes" hint="Optional, for every line above">
+            <textarea
+              rows={2}
+              value={notes}
+              onChange={(event) => setNotes(event.target.value)}
+              placeholder="Infill, supports, who to hand it to…"
+              className="w-full rounded-[var(--radius-control)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-ink)] placeholder:text-[var(--color-ink-faint)] transition-colors focus:border-[var(--color-accent)]"
             />
           </Field>
         </div>

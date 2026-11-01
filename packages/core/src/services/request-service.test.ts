@@ -584,6 +584,8 @@ describe('print queue', { tags: ['integration'] }, () => {
         done: 1,
         cancelled: 0,
         overdue: 1,
+        remainingMin: 0,
+        unestimated: 3,
       })
     })
 

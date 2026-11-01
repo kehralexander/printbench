@@ -5,6 +5,7 @@ import { headers } from 'next/headers'
 import { sql } from 'drizzle-orm'
 import { Box, Boxes, FileStack, FolderOpen, HardDrive, Layers, Package } from 'lucide-react'
 import { getDb } from '@pb/db'
+import { filamentOptions } from '@/lib/filament-options'
 import { getSessionUser } from '@pb/auth'
 import {
   can,
@@ -226,7 +227,7 @@ export default async function ModelPage({ params }: { params: Promise<{ publicId
 
   const canQueue = can(policyUser, 'request:create')
 
-  const [prints, stats, suggestions, settings, memberships, liked, queued, spools] =
+  const [prints, stats, suggestions, settings, memberships, liked, queued, spools, filaments] =
     await Promise.all([
       listPrints(db, { modelId: model.id, limit: 50 }),
       printStats(db, model.id),
@@ -236,6 +237,7 @@ export default async function ModelPage({ params }: { params: Promise<{ publicId
       user ? isLiked(db, user.id, model.id) : Promise.resolve(false),
       canQueue ? openRequestsForModel(db, model.id) : Promise.resolve([]),
       canLogPrints ? listSpools(db) : Promise.resolve([]),
+      canQueue ? filamentOptions(db) : Promise.resolve([]),
     ])
 
   const canCollect = can(policyUser, 'collection:edit')
@@ -355,6 +357,18 @@ export default async function ModelPage({ params }: { params: Promise<{ publicId
                   modelPublicId={model.public_id}
                   modelName={model.name}
                   openCount={queued.length}
+                  files={files.rows
+                    .filter(
+                      (file) =>
+                        !file.missing_at &&
+                        (file.category === 'model' || file.category === 'slicer'),
+                    )
+                    .map((file) => ({
+                      id: file.id,
+                      filename: file.filename,
+                      category: file.category as 'model' | 'slicer',
+                    }))}
+                  filaments={filaments}
                 />
               )}
               {canCollect && (

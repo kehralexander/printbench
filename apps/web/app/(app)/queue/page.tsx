@@ -3,6 +3,7 @@ import type { Route } from 'next'
 import { ClipboardList } from 'lucide-react'
 import {
   can,
+  formatEstimate,
   listRequests,
   queueStats,
   requesterSuggestions,
@@ -10,6 +11,7 @@ import {
 } from '@pb/core'
 import { getSessionUser } from '@pb/auth'
 import { getDb } from '@pb/db'
+import { filamentOptions } from '@/lib/filament-options'
 import { PageHeader } from '@/components/shell/page-header'
 import { NotPermitted } from '@/components/shell/not-permitted'
 import { Card } from '@/components/ui/card'
@@ -44,10 +46,11 @@ export default async function QueuePage({
   const filter = FILTERS.find((option) => option.key === params.filter) ?? FILTERS[0]!
 
   const db = getDb()
-  const [requests, stats, requesters] = await Promise.all([
+  const [requests, stats, requesters, filaments] = await Promise.all([
     listRequests(db, { status: filter.status, limit: 200 }),
     queueStats(db),
     requesterSuggestions(db),
+    filamentOptions(db),
   ])
 
   // Working the queue is a member's job; asking is open to anyone signed in.
@@ -64,9 +67,14 @@ export default async function QueuePage({
     status: request.status,
     material: request.material,
     colorHex: request.colorHex,
+    colorName: request.colorName,
+    estimatedMin: request.estimatedMin,
+    startedAt: request.startedAt?.toISOString() ?? null,
     dueAt: request.dueAt?.toISOString() ?? null,
     createdAt: request.createdAt.toISOString(),
     printRunId: request.printRunId,
+    modelId: request.modelId,
+    modelFileId: request.modelFileId,
     modelPublicId: request.modelPublicId,
     modelName: request.modelName,
     modelMissing: request.modelMissing,
@@ -83,7 +91,7 @@ export default async function QueuePage({
       />
 
       <div className="mb-4">
-        <AddRequests requesterSuggestions={requesters} />
+        <AddRequests requesterSuggestions={requesters} filaments={filaments} />
       </div>
 
       {!empty && (
@@ -134,7 +142,12 @@ export default async function QueuePage({
         <Card className="overflow-hidden">
           <ul className="divide-y divide-[var(--color-border)]">
             {rows.map((request) => (
-              <RequestRow key={request.id} request={request} canRun={canRun} />
+              <RequestRow
+                key={request.id}
+                request={request}
+                canRun={canRun}
+                filaments={filaments}
+              />
             ))}
           </ul>
         </Card>
@@ -148,10 +161,19 @@ function summarise(stats: {
   printing: number
   done: number
   overdue: number
+  remainingMin: number
+  unestimated: number
 }): string {
   const parts: string[] = []
   if (stats.waiting > 0) parts.push(`${stats.waiting} waiting`)
   if (stats.printing > 0) parts.push(`${stats.printing} on the printer`)
+  if (stats.remainingMin > 0) {
+    // Said outright when it is a floor rather than a total.
+    parts.push(
+      `~${formatEstimate(stats.remainingMin)} of printing` +
+        (stats.unestimated > 0 ? ` (+${stats.unestimated} without an estimate)` : ''),
+    )
+  }
   if (stats.overdue > 0) parts.push(`${stats.overdue} overdue`)
   if (stats.done > 0) parts.push(`${stats.done} printed`)
 

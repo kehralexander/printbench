@@ -1,8 +1,12 @@
-import { sql } from 'drizzle-orm'
+import { eq, sql } from 'drizzle-orm'
 import type { Database } from '@pb/db'
+import { schema } from '@pb/db'
 import { deletePrint, logPrint } from './print-service'
+import { isParsableSlicerFile, readGcodeMetadata } from './slicer-metadata-service'
+import { createStorageAdapter, libraryLocationFromRow } from '../storage/factory'
 import {
   MAX_BULK_REQUESTS,
+  MAX_ESTIMATE_MIN,
   MAX_NAME,
   MAX_NOTES,
   MAX_QUANTITY,
@@ -47,6 +51,12 @@ export interface RequestInput {
   priority?: PrintRequestPriority | null
   material?: string | null
   colorHex?: string | null
+  colorName?: string | null
+  /**
+   * Minutes for one print. `undefined` lets the queue suggest one from the
+   * linked model; `null` is an explicit "no estimate".
+   */
+  estimatedMin?: number | null
   dueAt?: Date | null
 }
 
@@ -80,6 +90,11 @@ export interface PrintRequest {
   status: PrintRequestStatus
   material: string | null
   colorHex: string | null
+  colorName: string | null
+  /** Minutes for one print; the whole request takes this times `quantity`. */
+  estimatedMin: number | null
+  /** Set while it is on the printer. */
+  startedAt: Date | null
 
   dueAt: Date | null
   closedAt: Date | null
@@ -97,6 +112,13 @@ export interface QueueStats {
   cancelled: number
   /** Open requests whose due date has passed. */
   overdue: number
+  /**
+   * Printing time left in the open queue, in minutes: every waiting request's
+   * estimate times its quantity, plus what remains of the ones printing.
+   */
+  remainingMin: number
+  /** Open requests with no estimate, which `remainingMin` cannot include. */
+  unestimated: number
 }
 
 /* ------------------------------------------------------------------ *
@@ -143,6 +165,14 @@ function cleanQuantity(value: number | null | undefined): number {
   return Math.trunc(value)
 }
 
+function cleanEstimate(value: number | null | undefined): number | null {
+  if (value == null) return null
+  if (!Number.isFinite(value) || value < 1 || value > MAX_ESTIMATE_MIN) {
+    throw new RequestValidationError('The estimate must be between a minute and a month.')
+  }
+  return Math.round(value)
+}
+
 function trimTo(value: string | null | undefined, max: number): string | null {
   const trimmed = value?.trim()
   return trimmed ? trimmed.slice(0, max) : null
@@ -185,6 +215,99 @@ async function fileBelongsToModel(
   return rows.rows.length > 0
 }
 
+export interface EstimateSuggestion {
+  minutes: number
+  /** Where it came from, so the form can say so instead of looking authoritative. */
+  source: 'gcode' | 'history'
+}
+
+/**
+ * A starting point for "how long will one print take", or null.
+ *
+ * The slicer knows best, so a G-code file wins: the chosen one, or the model's
+ * only one when none was chosen. Several G-code files with none chosen are
+ * different plates with different times, and picking one would be a guess.
+ * Failing that, the median of earlier successful prints of the same file, then
+ * of the model — only runs with a real duration count.
+ *
+ * Only ever a suggestion. Callers apply it to an empty estimate and never over
+ * one somebody typed.
+ */
+export async function suggestEstimate(
+  db: Database,
+  modelId: string,
+  modelFileId: string | null = null,
+): Promise<EstimateSuggestion | null> {
+  const files = await db
+    .select({
+      id: schema.modelFiles.id,
+      filename: schema.modelFiles.filename,
+      extension: schema.modelFiles.extension,
+      size: schema.modelFiles.size,
+      missingAt: schema.modelFiles.missingAt,
+      model: schema.models,
+      library: schema.libraries,
+    })
+    .from(schema.modelFiles)
+    .innerJoin(schema.models, eq(schema.models.id, schema.modelFiles.modelId))
+    .innerJoin(schema.libraries, eq(schema.libraries.id, schema.models.libraryId))
+    .where(eq(schema.modelFiles.modelId, modelId))
+
+  const gcodes = files.filter((file) => !file.missingAt && isParsableSlicerFile(file.extension))
+  const gcode = modelFileId
+    ? gcodes.find((file) => file.id === modelFileId)
+    : gcodes.length === 1
+      ? gcodes[0]
+      : undefined
+
+  if (gcode) {
+    const relativePath = gcode.model.isFileModel
+      ? gcode.model.path
+      : `${gcode.model.path}/${gcode.filename}`
+    const metadata = await readGcodeMetadata(
+      createStorageAdapter(libraryLocationFromRow(gcode.library)),
+      relativePath,
+      gcode.size,
+    )
+    if (
+      metadata.durationMin &&
+      metadata.durationMin >= 1 &&
+      metadata.durationMin <= MAX_ESTIMATE_MIN
+    ) {
+      return { minutes: Math.round(metadata.durationMin), source: 'gcode' }
+    }
+  }
+
+  const history = await db.execute<{ same_file: number | null; model: number | null }>(sql`
+    SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY duration_min)
+             FILTER (WHERE ${modelFileId}::uuid IS NOT NULL AND model_file_id = ${modelFileId}::uuid)
+             AS same_file,
+           percentile_cont(0.5) WITHIN GROUP (ORDER BY duration_min) AS model
+    FROM print_runs
+    WHERE model_id = ${modelId} AND status = 'success' AND duration_min > 0`)
+  const median = history.rows[0]?.same_file ?? history.rows[0]?.model
+  if (median != null && Number(median) >= 1) {
+    return { minutes: Math.min(Math.round(Number(median)), MAX_ESTIMATE_MIN), source: 'history' }
+  }
+
+  return null
+}
+
+/** The suggestion, swallowing failures: an estimate is never worth failing a write over. */
+async function quietSuggestion(
+  db: Database,
+  modelId: string | null,
+  modelFileId: string | null,
+): Promise<number | null> {
+  if (!modelId) return null
+  try {
+    return (await suggestEstimate(db, modelId, modelFileId))?.minutes ?? null
+  } catch (error) {
+    console.warn(`[queue] no estimate for model ${modelId}: ${String(error)}`)
+    return null
+  }
+}
+
 /* ------------------------------------------------------------------ *
  * Writes
  * ------------------------------------------------------------------ */
@@ -213,15 +336,21 @@ export async function createRequest(
     throw new RequestValidationError('That file does not belong to the linked model.')
   }
 
+  const estimatedMin =
+    input.estimatedMin === undefined
+      ? await quietSuggestion(db, modelId, modelFileId)
+      : cleanEstimate(input.estimatedMin)
+
   const rows = await db.execute<{ id: string }>(sql`
     INSERT INTO print_requests
       (title, notes, requested_by, requested_by_user_id, model_id, model_file_id,
-       quantity, priority, material, color_hex, due_at, created_by)
+       quantity, priority, material, color_hex, color_name, estimated_min, due_at, created_by)
     VALUES (${title}, ${trimTo(input.notes, MAX_NOTES)}, ${trimTo(input.requestedBy, MAX_NAME)},
             ${input.requestedByUserId ?? null}, ${modelId}, ${modelFileId},
             ${cleanQuantity(input.quantity)},
             ${cleanPriority(input.priority)}::print_request_priority,
             ${trimTo(input.material, MAX_NAME)}, ${cleanColor(input.colorHex)},
+            ${trimTo(input.colorName, MAX_NAME)}, ${estimatedMin},
             ${input.dueAt ?? null}, ${createdBy})
     RETURNING id`)
 
@@ -273,7 +402,16 @@ export async function createRequests(
 export type RequestPatch = Partial<
   Pick<
     RequestInput,
-    'title' | 'notes' | 'requestedBy' | 'quantity' | 'priority' | 'material' | 'colorHex' | 'dueAt'
+    | 'title'
+    | 'notes'
+    | 'requestedBy'
+    | 'quantity'
+    | 'priority'
+    | 'material'
+    | 'colorHex'
+    | 'colorName'
+    | 'estimatedMin'
+    | 'dueAt'
   >
 >
 
@@ -295,6 +433,12 @@ export async function updateRequest(
   }
   if (patch.material !== undefined) sets.push(sql`material = ${trimTo(patch.material, MAX_NAME)}`)
   if (patch.colorHex !== undefined) sets.push(sql`color_hex = ${cleanColor(patch.colorHex)}`)
+  if (patch.colorName !== undefined) {
+    sets.push(sql`color_name = ${trimTo(patch.colorName, MAX_NAME)}`)
+  }
+  if (patch.estimatedMin !== undefined) {
+    sets.push(sql`estimated_min = ${cleanEstimate(patch.estimatedMin)}`)
+  }
   if (patch.dueAt !== undefined) sets.push(sql`due_at = ${patch.dueAt ?? null}`)
 
   // Nothing to change is not an error — it is a form submitted untouched.
@@ -334,13 +478,15 @@ export async function setRequestStatus(
     model_file_id: string | null
     material: string | null
     color_hex: string | null
+    color_name: string | null
+    started_at: Date | null
     quantity: number
     requested_by: string | null
     notes: string | null
     print_run_id: string | null
   }>(sql`
-    SELECT status, model_id, model_file_id, material, color_hex, quantity,
-           requested_by, notes, print_run_id
+    SELECT status, model_id, model_file_id, material, color_hex, color_name, started_at,
+           quantity, requested_by, notes, print_run_id
     FROM print_requests WHERE id = ${requestId} LIMIT 1`)
 
   const current = rows.rows[0]
@@ -360,12 +506,15 @@ export async function setRequestStatus(
         userId: options.userId ?? null,
         material: current.material,
         colorHex: current.color_hex,
+        colorName: current.color_name,
         status: 'success',
         /*
-         * Finished now, started unknown. Guessing a start time would invent a
-         * duration, and an invented duration pollutes the totals the print
-         * history exists to report.
+         * Started when it went on the printer, if it went through "Start";
+         * otherwise unknown. Guessing a start time would invent a duration,
+         * and an invented duration pollutes the totals the print history
+         * exists to report — including the estimates this queue suggests.
          */
+        startedAt: current.started_at ? new Date(current.started_at) : null,
         finishedAt: new Date(),
         notes: historyNote(current.requested_by, current.quantity, current.notes),
       })
@@ -381,7 +530,9 @@ export async function setRequestStatus(
      * filament weight or a printer name has been adopted as a real record of a
      * real print, and deleting it would throw away work the queue never owned.
      */
-    if (await isUntouchedRun(db, printRunId)) await deletePrint(db, printRunId)
+    if (await isUntouchedRun(db, printRunId, current.started_at)) {
+      await deletePrint(db, printRunId)
+    }
     printRunId = null
   }
 
@@ -389,6 +540,16 @@ export async function setRequestStatus(
     UPDATE print_requests
     SET status = ${next}::print_request_status,
         closed_at = ${closed ? sql`coalesce(closed_at, now())` : sql`NULL`},
+        -- Stamped going onto the printer, kept through "printed" for the
+        -- duration, and cleared by anything that takes it back off.
+        started_at = ${
+          next === 'printing'
+            ? // Milliseconds, like the JS Date it becomes on the print run.
+              sql`coalesce(started_at, date_trunc('milliseconds', now()))`
+            : next === 'done'
+              ? sql`started_at`
+              : sql`NULL`
+        },
         print_run_id = ${printRunId},
         updated_at = now()
     WHERE id = ${requestId}`)
@@ -424,11 +585,23 @@ function historyNote(
  * excluded deliberately: the queue sets those itself from the request, so
  * their presence says nothing about whether anyone has been here since.
  */
-async function isUntouchedRun(db: Database, printRunId: string): Promise<boolean> {
+async function isUntouchedRun(
+  db: Database,
+  printRunId: string,
+  requestStartedAt: Date | null,
+): Promise<boolean> {
+  /*
+   * A start time and duration the queue wrote itself — from the request's own
+   * "Start" — are not someone's edits, so they do not count as touched.
+   */
+  const startedAt = requestStartedAt ? new Date(requestStartedAt) : null
   const rows = await db.execute<{ untouched: boolean }>(sql`
-    SELECT (rating IS NULL AND filament_used_g IS NULL AND duration_min IS NULL
+    SELECT (rating IS NULL AND filament_used_g IS NULL
             AND printer_name IS NULL AND layer_height_mm IS NULL AND nozzle_mm IS NULL
-            AND photo_key IS NULL AND started_at IS NULL AND status = 'success'
+            AND photo_key IS NULL AND status = 'success'
+            AND (started_at IS NULL OR started_at = ${startedAt})
+            AND (duration_min IS NULL OR (started_at IS NOT NULL AND finished_at IS NOT NULL
+                 AND duration_min = greatest(0, round(extract(epoch FROM finished_at - started_at) / 60))))
             AND NOT EXISTS (SELECT 1 FROM print_filament_usage WHERE print_run_id = print_runs.id)) AS untouched
     FROM print_runs WHERE id = ${printRunId} LIMIT 1`)
 
@@ -447,12 +620,16 @@ export async function linkRequest(
     throw new RequestValidationError('That file does not belong to that model.')
   }
 
+  // Fills an empty estimate only; one that was typed in stays as it is.
+  const suggested = await quietSuggestion(db, modelId, modelId ? modelFileId : null)
+
   await db.execute(sql`
     UPDATE print_requests
     SET model_id = ${modelId},
         -- Clearing the model clears the file with it, or the row keeps a file
         -- id that the check constraint would reject on the next write.
         model_file_id = ${modelId ? modelFileId : null},
+        estimated_min = coalesce(estimated_min, ${suggested}::int),
         updated_at = now()
     WHERE id = ${requestId}`)
 }
@@ -483,6 +660,9 @@ type Row = {
   status: PrintRequestStatus
   material: string | null
   color_hex: string | null
+  color_name: string | null
+  estimated_min: number | null
+  started_at: string | null
   due_at: string | null
   closed_at: string | null
   print_run_id: string | null
@@ -499,8 +679,8 @@ const SELECT_REQUEST = sql`
            WHERE f.model_id = m.id AND f.thumb_state = 'ok' AND f.missing_at IS NULL
            ORDER BY (f.category = 'slicer'), f.size DESC LIMIT 1) AS thumb_file_id,
          r.model_file_id, mf.filename,
-         r.quantity, r.priority, r.status, r.material, r.color_hex,
-         r.due_at, r.closed_at, r.print_run_id,
+         r.quantity, r.priority, r.status, r.material, r.color_hex, r.color_name,
+         r.estimated_min, r.started_at, r.due_at, r.closed_at, r.print_run_id,
          r.created_by, u.name AS created_by_name, r.created_at
   FROM print_requests r
   LEFT JOIN models m ON m.id = r.model_id
@@ -526,6 +706,9 @@ function toRequest(row: Row): PrintRequest {
     status: row.status,
     material: row.material,
     colorHex: row.color_hex,
+    colorName: row.color_name,
+    estimatedMin: row.estimated_min,
+    startedAt: row.started_at ? new Date(row.started_at) : null,
     dueAt: row.due_at ? new Date(row.due_at) : null,
     closedAt: row.closed_at ? new Date(row.closed_at) : null,
     printRunId: row.print_run_id,
@@ -604,6 +787,8 @@ export async function queueStats(db: Database): Promise<QueueStats> {
     done: number
     cancelled: number
     overdue: number
+    remaining_min: number
+    unestimated: number
   }>(sql`
     SELECT count(*) FILTER (WHERE status = 'requested')::int AS waiting,
            count(*) FILTER (WHERE status = 'printing')::int  AS printing,
@@ -611,7 +796,18 @@ export async function queueStats(db: Database): Promise<QueueStats> {
            count(*) FILTER (WHERE status = 'cancelled')::int AS cancelled,
            count(*) FILTER (
              WHERE status IN ('requested', 'printing') AND due_at IS NOT NULL AND due_at < now()
-           )::int AS overdue
+           )::int AS overdue,
+           coalesce(sum(
+             CASE
+               WHEN status = 'requested' THEN estimated_min * quantity
+               -- Never negative: a print running long has not given time back.
+               WHEN status = 'printing' THEN greatest(0, estimated_min * quantity
+                 - extract(epoch FROM now() - coalesce(started_at, now())) / 60)
+             END
+           ), 0)::int AS remaining_min,
+           count(*) FILTER (
+             WHERE status IN ('requested', 'printing') AND estimated_min IS NULL
+           )::int AS unestimated
     FROM print_requests`)
 
   const row = result.rows[0]
@@ -621,6 +817,8 @@ export async function queueStats(db: Database): Promise<QueueStats> {
     done: row?.done ?? 0,
     cancelled: row?.cancelled ?? 0,
     overdue: row?.overdue ?? 0,
+    remainingMin: row?.remaining_min ?? 0,
+    unestimated: row?.unestimated ?? 0,
   }
 }
 

@@ -14,14 +14,17 @@ import {
   parseRequestLines,
   quickSearch,
   setRequestStatus,
+  suggestEstimate,
   updateRequest,
+  type EstimateSuggestion,
   type PrintRequest,
   type PrintRequestPriority,
   type PrintRequestStatus,
   type RequestPatch,
 } from '@pb/core'
 import { requireUser } from '@pb/auth'
-import { getDb } from '@pb/db'
+import { getDb, schema } from '@pb/db'
+import { and, eq, inArray, isNull } from 'drizzle-orm'
 import { audit } from '@/lib/audit'
 
 type Result = { ok: true } | { ok: false; error: string }
@@ -72,6 +75,9 @@ export async function addRequests(input: {
   priority?: PrintRequestPriority | null
   dueAt?: string | null
   notes?: string | null
+  material?: string | null
+  colorHex?: string | null
+  colorName?: string | null
 }): Promise<AddResult> {
   try {
     const user = await requireUser()
@@ -99,6 +105,9 @@ export async function addRequests(input: {
         requestedByUserId: requestedBy === null || requestedBy === user.name ? user.id : null,
         priority: input.priority ?? 'normal',
         notes: input.notes ?? null,
+        material: input.material ?? null,
+        colorHex: input.colorHex ?? null,
+        colorName: input.colorName ?? null,
         dueAt: input.dueAt ? new Date(input.dueAt) : null,
       })),
       user.id,
@@ -137,6 +146,13 @@ export async function addModelToQueue(input: {
   title: string
   quantity?: number
   requestedBy?: string | null
+  notes?: string | null
+  material?: string | null
+  colorHex?: string | null
+  colorName?: string | null
+  modelFileId?: string | null
+  /** Minutes per print; omitted lets the queue suggest one. */
+  estimatedMin?: number | null
 }): Promise<Result> {
   try {
     const user = await requireUser()
@@ -152,7 +168,13 @@ export async function addModelToQueue(input: {
       {
         title: input.title,
         modelId: input.modelId,
+        modelFileId: input.modelFileId ?? null,
         quantity: input.quantity ?? 1,
+        notes: input.notes ?? null,
+        material: input.material ?? null,
+        colorHex: input.colorHex ?? null,
+        colorName: input.colorName ?? null,
+        estimatedMin: input.estimatedMin,
         requestedBy,
         requestedByUserId: requestedBy === null || requestedBy === user.name ? user.id : null,
       },
@@ -267,6 +289,62 @@ export async function removeRequest(requestId: string): Promise<Result> {
   } catch (error) {
     return { ok: false, error: describe(error, 'Could not remove that request.') }
   }
+}
+
+/**
+ * A suggested print time for one print of a model (or one of its files), to
+ * pre-fill an estimate the user can still change. Null when there is nothing
+ * to go on.
+ */
+export async function estimateFor(
+  modelId: string,
+  modelFileId: string | null = null,
+): Promise<EstimateSuggestion | null> {
+  try {
+    const user = await requireUser()
+    assertCan(
+      { id: user.id, role: user.role ?? null, banned: user.banned ?? false },
+      'request:create',
+    )
+    return await suggestEstimate(getDb(), modelId, modelFileId)
+  } catch {
+    return null
+  }
+}
+
+export interface PrintableFile {
+  id: string
+  filename: string
+  /** "slicer" files are sliced plates; "model" files still need slicing. */
+  category: 'model' | 'slicer'
+}
+
+/** The files a request could point at: meshes and sliced plates, never images. */
+export async function printableFiles(modelId: string): Promise<PrintableFile[]> {
+  const user = await requireUser()
+  assertCan({ id: user.id, role: user.role ?? null, banned: user.banned ?? false }, 'model:view')
+
+  const rows = await getDb()
+    .select({
+      id: schema.modelFiles.id,
+      filename: schema.modelFiles.filename,
+      category: schema.modelFiles.category,
+    })
+    .from(schema.modelFiles)
+    .where(
+      and(
+        eq(schema.modelFiles.modelId, modelId),
+        isNull(schema.modelFiles.missingAt),
+        inArray(schema.modelFiles.category, ['model', 'slicer']),
+      ),
+    )
+    .orderBy(schema.modelFiles.category, schema.modelFiles.filename)
+
+  return rows.map((row) => ({
+    id: row.id,
+    filename: row.filename,
+    category: row.category as PrintableFile['category'],
+  }))
 }
 
 export interface ModelChoice {

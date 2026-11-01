@@ -100,3 +100,52 @@ export function clampQuantity(value: number): number {
   if (!Number.isFinite(value)) return 1
   return Math.min(Math.max(Math.trunc(value), 1), MAX_QUANTITY)
 }
+
+/** A month of printing. Anything longer is a typo, not an estimate. */
+export const MAX_ESTIMATE_MIN = 30 * 24 * 60
+
+/**
+ * Reads a typed print time into minutes, or null when it is not one.
+ *
+ * Accepts what people actually type: "2h 10m", "2h", "45m", "1.5h", "2:10"
+ * (hours and minutes, as slicers display it), "1d 2h", and a bare number,
+ * which is minutes. Blank means "no estimate", which is also null — callers
+ * tell the two apart by whether the input was empty.
+ */
+export function parseEstimate(input: string): number | null {
+  const text = input.trim().toLowerCase()
+  if (text.length === 0) return null
+
+  let minutes: number
+  const clock = text.match(/^(\d{1,4}):([0-5]\d)$/)
+  if (clock) {
+    minutes = Number(clock[1]) * 60 + Number(clock[2])
+  } else if (/^\d+(?:\.\d+)?$/.test(text)) {
+    minutes = Number(text)
+  } else {
+    const units: Record<string, number> = { d: 1440, h: 60, m: 1 }
+    const pattern = /(\d+(?:[.,]\d+)?)\s*(days?|d|hours?|hrs?|h|minutes?|mins?|m)\s*/gy
+    minutes = 0
+    let consumed = 0
+    for (const match of text.matchAll(pattern)) {
+      if (match.index !== consumed) return null
+      minutes += Number(match[1]!.replace(',', '.')) * units[match[2]![0]!]!
+      consumed = match.index + match[0].length
+    }
+    if (consumed !== text.length || consumed === 0) return null
+  }
+
+  const rounded = Math.round(minutes)
+  return rounded >= 1 && rounded <= MAX_ESTIMATE_MIN ? rounded : null
+}
+
+/** "2h 10m", "45m", "1d 3h" — the same shape parseEstimate reads back. */
+export function formatEstimate(minutes: number): string {
+  const total = Math.max(0, Math.round(minutes))
+  const days = Math.floor(total / 1440)
+  const hours = Math.floor((total % 1440) / 60)
+  const mins = total % 60
+  if (days > 0) return hours > 0 ? `${days}d ${hours}h` : `${days}d`
+  if (hours > 0) return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`
+  return `${mins}m`
+}
