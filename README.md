@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/PrintBench/printbench/releases/latest"><img src="https://img.shields.io/github/v/release/PrintBench/printbench?label=version&style=flat-square"></a>
+  <a href="https://github.com/kehralexander/printbench/releases/latest"><img src="https://img.shields.io/github/v/release/kehralexander/printbench?label=version&style=flat-square"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green?style=flat-square"></a>
   <img src="https://img.shields.io/badge/runs_on-Docker-2496ED?style=flat-square&logo=docker&logoColor=white">
   <img src="https://img.shields.io/badge/needs-Postgres_only-336791?style=flat-square&logo=postgresql&logoColor=white">
@@ -23,6 +23,20 @@
 Point PrintBench at a folder of print files and it turns them into a searchable, visual library: thumbnails, 3D previews, tags, creators, collections, print history and a print queue. Existing libraries are read-only by default. Managed libraries can opt into file changes.
 
 Postgres is the **only** thing it needs. No Redis, no message broker, no Elasticsearch, and no native 3D toolchain to install.
+
+## About this fork
+
+This is a fork of [PrintBench/printbench](https://github.com/PrintBench/printbench). On top of the original it adds:
+
+- **Single sign-on** with any OpenID Connect provider (Authentik, Keycloak, …), with accounts and roles from the provider's groups, and an SSO-only sign-in page.
+- **A print queue that follows the printers.** The worker watches Moonraker, OctoPrint, PrusaLink and KX-Bridge printers, moves requests along as their files start and finish, and can send and start a request on a free printer. The queue can be dragged into order and shows print-time estimates.
+- **Live printer status** on the dashboard and its own page, with progress, times, temperatures and the filament loaded in each slot.
+- **Automatic print history.** Finished, cancelled and failed jobs are logged with real times, can be rated with a photo, and feed success rates per model, file and material.
+- **Spoolman as the filament inventory**, with low-spool warnings in the queue.
+- **Status links for requesters**: a page and QR code that needs no account and shows a request's place in the queue and its print as it happens.
+- **G-code previews**, adding files to an existing model, and a consistent design across every page.
+
+See the [release notes](docs/releases/v0.8.0.md) for the details and upgrade notes.
 
 ## Features
 
