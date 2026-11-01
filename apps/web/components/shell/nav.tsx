@@ -60,7 +60,6 @@ export const NAV_SECTIONS: { title?: string; items: NavItem[] }[] = [
   {
     items: [
       { href: '/', label: 'Dashboard', icon: 'home' },
-      { href: '/search', label: 'Search', icon: 'search' },
       { href: '/models', label: 'Models', icon: 'boxes' },
       { href: '/queue', label: 'Print queue', icon: 'queue', requires: 'request:create' },
       { href: '/printers', label: 'Printer status', icon: 'printer', requires: 'model:view' },

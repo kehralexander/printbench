@@ -22,6 +22,13 @@ const TAG_DRAGON = '7e000000-0000-4000-8000-00000000000e'
 const TAG_TERRAIN = '7f000000-0000-4000-8000-00000000000f'
 const PREVIEW_IMAGE = '7f000000-0000-4000-8000-000000000010'
 
+/** A cursor just past the given name, in name order. */
+function walkEnd(name: string): string {
+  return Buffer.from(JSON.stringify([name, 'ffffffff-ffff-4fff-bfff-ffffffffffff'])).toString(
+    'base64url',
+  )
+}
+
 describe('searchModels', { tags: ['integration'] }, () => {
   let pool: ReturnType<typeof createDb>['pool']
   let db: ReturnType<typeof createDb>['db']
@@ -460,6 +467,67 @@ describe('searchModels', { tags: ['integration'] }, () => {
       expect(result.hits).toEqual([])
       // The total is unknown from an empty window; the UI shows the last page.
       expect(result.total).toBe(0)
+    })
+
+    /** Follows `next` cursors to the end, then `previous` back to the start. */
+    async function walk(sort: 'name' | 'recent' | 'oldest' | 'largest' | 'relevance') {
+      const forward: string[][] = []
+      let page = await search({ limit: 3, sort })
+      forward.push(page.hits.map((hit) => hit.name))
+      while (page.cursors?.next) {
+        page = await search({ limit: 3, sort, after: page.cursors.next })
+        forward.push(page.hits.map((hit) => hit.name))
+      }
+      const backward: string[][] = []
+      while (page.cursors?.previous) {
+        page = await search({ limit: 3, sort, before: page.cursors.previous })
+        backward.unshift(page.hits.map((hit) => hit.name))
+      }
+      return { forward, backward, total: page.total }
+    }
+
+    it.each(['name', 'recent', 'oldest', 'largest', 'relevance'] as const)(
+      'pages by cursor in %s order, both ways, without repeating or skipping',
+      async (sort) => {
+        const everything = await names({ sort, limit: 50 })
+        const { forward, backward, total } = await walk(sort)
+        expect(forward.flat()).toEqual(everything)
+        expect(forward.map((page) => page.length)).toEqual([3, 3, 3, 1])
+        expect(backward.slice(0, 3)).toEqual(forward.slice(0, 3))
+        expect(total).toBe(10)
+      },
+    )
+
+    it('breaks ties on the sort value by id', async () => {
+      await db.execute(sql`
+        UPDATE models SET created_at = '2026-01-01 00:00:00.123456+00'
+        WHERE library_id IN (${LIB_A}, ${LIB_B})
+      `)
+      const { forward } = await walk('recent')
+      expect(new Set(forward.flat()).size).toBe(10)
+    })
+
+    it('starts at the first page for a cursor it did not make', async () => {
+      const first = await names({ limit: 3, sort: 'name' })
+      for (const after of ['nonsense', Buffer.from('["x","not-a-uuid"]').toString('base64url')]) {
+        expect(await names({ limit: 3, sort: 'name', after })).toEqual(first)
+      }
+      const nameCursor = (await search({ limit: 3, sort: 'name' })).cursors!.next!
+      // A name cursor is not a size: no error, just the first page.
+      expect((await names({ limit: 3, sort: 'largest', after: nameCursor }))[0]).toBe(
+        'Red Dragon Miniature',
+      )
+    })
+
+    it('still counts the matches on a page past the end', async () => {
+      const last = await search({ limit: 3, sort: 'name', after: walkEnd('Stone Bridge Terrain') })
+      expect(last.hits).toEqual([])
+      expect(last.total).toBe(10)
+    })
+
+    it('pages a typed query by offset, with no cursors', async () => {
+      const result = await search({ query: 'dragon' })
+      expect(result.cursors).toBeNull()
     })
   })
 

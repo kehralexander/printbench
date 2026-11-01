@@ -1,82 +1,73 @@
 import Link from 'next/link'
-import { Boxes, ChevronLeft, ChevronRight, HardDrive } from 'lucide-react'
-import { sql } from 'drizzle-orm'
+import type { Route } from 'next'
+import {
+  ChevronLeft,
+  ChevronRight,
+  HardDrive,
+  Search as SearchIcon,
+  SlidersHorizontal,
+} from 'lucide-react'
+import { searchModels, type SearchResult, type SortOrder } from '@pb/core'
 import { getDb } from '@pb/db'
-import { modelFormatSql, modelGeometrySql, modelThumbnailSql } from '@pb/core'
 import { PageHeader } from '@/components/shell/page-header'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Button } from '@/components/ui/button'
 import { ModelCard, formatDimensions } from '@/components/model/model-card'
+import { SearchBox } from './search-box'
+import { FacetPanel } from './facet-panel'
+import { parseSearchParams, buildHref, type ParsedSearchParams, type RawParams } from './params'
 
 export const dynamic = 'force-dynamic'
 export const metadata = { title: 'Models' }
 
+const NUMBER = new Intl.NumberFormat('en-GB')
 const PAGE_SIZE = 48
 
-type ModelRow = {
-  id: string
-  public_id: string
-  name: string
-  path: string
-  file_count: number
-  total_size: string
-  library_name: string
-  is_package: boolean
-  preview_extension: string | null
-  preview_image_file_id: string | null
-  thumb_file_id: string | null
-  thumb_key: string | null
-  bbox_x: string | null
-  bbox_y: string | null
-  bbox_z: string | null
-}
-
 /**
- * Keyset pagination on (name, id) rather than OFFSET.
+ * The library: every model, with search and filters over it.
  *
- * OFFSET degrades linearly — page 200 of a 10,000-model library makes Postgres
- * walk 9,600 rows it will throw away. A keyset seek is the same cost on page
- * 200 as on page 1, and the partial index on (library_id, name, id) covers it.
+ * Browsing and searching are one page — an empty search box is simply the
+ * whole library A–Z. Every part of the view lives in the URL, so it can be
+ * bookmarked, shared and navigated back to, and results render on the server
+ * rather than behind a spinner.
+ *
+ * Paging is by cursor wherever the order allows it (see `searchModels`), so
+ * deep pages in a big library cost no more than the first. Only a typed
+ * query in best-match order falls back to numbered offsets.
  */
-export default async function ModelsPage({
-  searchParams,
-}: {
-  searchParams: Promise<{ after?: string; afterId?: string; before?: string }>
-}) {
-  const params = await searchParams
-  const db = getDb()
+export default async function ModelsPage({ searchParams }: { searchParams: Promise<RawParams> }) {
+  const raw = await searchParams
+  const params = parseSearchParams(raw)
+  const page = Math.max(1, params.page)
 
-  const afterName = params.after
-  const afterId = params.afterId
+  const result = await searchModels(getDb(), {
+    query: params.q,
+    libraryIds: params.library,
+    creatorIds: params.creator,
+    tagIds: params.tag,
+    licenses: params.license,
+    extensions: params.format,
+    presupported: params.presupported,
+    neverPrinted: params.neverPrinted,
+    missingPreview: params.missingPreview,
+    minSize: params.minSize,
+    isPackage: params.type === 'package' ? true : params.type === 'model' ? false : undefined,
+    sort: params.sort as SortOrder,
+    limit: PAGE_SIZE,
+    // With a cursor the page number is only a label; a cursor that turns out
+    // not to be one should land on the first page, not page × 48 in.
+    offset: params.after || params.before ? 0 : (page - 1) * PAGE_SIZE,
+    after: params.after,
+    before: params.before,
+  })
 
-  const result = await db.execute<ModelRow>(sql`
-    SELECT m.id, m.public_id, m.name, m.path, m.file_count, m.total_size, m.is_package,
-           l.name AS library_name,
-           ${modelFormatSql(sql`m.id`, sql`m.preview_file_id`)} AS preview_extension,
-           CASE WHEN f.category = 'image' THEN f.id END AS preview_image_file_id,
-           thumb.id AS thumb_file_id, thumb.thumb_key,
-           geometry.bbox_x, geometry.bbox_y, geometry.bbox_z
-    FROM models m
-    JOIN libraries l ON l.id = m.library_id
-    LEFT JOIN model_files f ON f.id = m.preview_file_id
-    LEFT JOIN LATERAL (${modelGeometrySql(sql`m.id`, sql`m.preview_file_id`)}) geometry ON true
-    LEFT JOIN LATERAL (${modelThumbnailSql(sql`m.id`, sql`m.preview_file_id`)}) thumb ON true
-    WHERE m.missing_at IS NULL
-      ${afterName && afterId ? sql`AND (m.name, m.id) > (${afterName}, ${afterId}::uuid)` : sql``}
-    ORDER BY m.name ASC, m.id ASC
-    LIMIT ${PAGE_SIZE + 1}
-  `)
+  const activeFilters = countActiveFilters(params)
+  const narrowed = Boolean(params.q) || activeFilters > 0
+  // Paged past the end — the library changed under a cursor — rather than
+  // nothing matching.
+  const stale = result.hits.length === 0 && result.total > 0
 
-  const rows = result.rows.slice(0, PAGE_SIZE)
-  const hasMore = result.rows.length > PAGE_SIZE
-  const last = rows[rows.length - 1]
-
-  const totals = await db.execute<{ n: number }>(
-    sql`SELECT count(*)::int AS n FROM models WHERE missing_at IS NULL`,
-  )
-  const total = totals.rows[0]?.n ?? 0
-
-  if (total === 0) {
+  if (!narrowed && result.total === 0) {
     return (
       <>
         <PageHeader title="Models" />
@@ -94,69 +85,196 @@ export default async function ModelsPage({
     )
   }
 
+  const resultLabel =
+    params.type === 'package'
+      ? result.total === 1
+        ? 'package'
+        : 'packages'
+      : params.type === 'model'
+        ? result.total === 1
+          ? 'model'
+          : 'models'
+        : result.total === 1
+          ? 'item'
+          : 'items'
+
+  const emptyFilterTitle =
+    params.type === 'package'
+      ? 'No packages match these filters'
+      : params.type === 'model'
+        ? 'No models match these filters'
+        : 'No items match these filters'
+
   return (
     <>
       <PageHeader
         title="Models"
-        description={`${new Intl.NumberFormat('en-GB').format(total)} in your library`}
+        description={
+          narrowed
+            ? `${NUMBER.format(result.total)} ${resultLabel}`
+            : `${NUMBER.format(result.total)} in your library`
+        }
       />
 
-      {rows.length === 0 ? (
-        <EmptyState
-          icon={<Boxes />}
-          title="Nothing on this page"
-          description="You have reached the end of the list."
-          action={
-            <Button asChild variant="secondary">
-              <Link href="/models">Back to the start</Link>
-            </Button>
-          }
-        />
-      ) : (
-        <>
-          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
-            {rows.map((row) => (
-              <ModelCard
-                key={row.id}
-                publicId={row.public_id}
-                name={row.name}
-                path={row.path}
-                fileCount={row.file_count}
-                totalSize={Number(row.total_size)}
-                libraryName={row.library_name}
-                previewExtension={row.preview_extension}
-                isPackage={row.is_package}
-                previewImageFileId={row.preview_image_file_id}
-                thumbFileId={row.thumb_file_id}
-                thumbKey={row.thumb_key}
-                dimensions={formatDimensions(
-                  Number(row.bbox_x ?? 0),
-                  Number(row.bbox_y ?? 0),
-                  Number(row.bbox_z ?? 0),
-                )}
-              />
-            ))}
-          </div>
+      <SearchBox initialQuery={params.q} params={raw} />
 
-          <nav className="mt-8 flex items-center justify-between" aria-label="Pagination">
-            <Button asChild variant="secondary" size="sm" disabled={!afterName}>
-              <Link href="/models">
-                <ChevronLeft />
-                First page
-              </Link>
-            </Button>
-
-            {hasMore && last && (
-              <Button asChild variant="secondary" size="sm">
-                <Link href={`/models?after=${encodeURIComponent(last.name)}&afterId=${last.id}`}>
-                  Next
-                  <ChevronRight />
-                </Link>
-              </Button>
+      <div className="mt-6 grid gap-6 lg:grid-cols-[220px_1fr]">
+        {/* Beside the grid on a wide screen; folded away above it on a narrow
+            one, so the models are not pushed below a screenful of filters. */}
+        <div className="hidden lg:block">
+          <FacetPanel facets={result.facets} params={params} raw={raw} />
+        </div>
+        <details className="rounded-[var(--radius-card)] border border-[var(--color-border)] px-4 py-3 lg:hidden">
+          <summary className="flex cursor-pointer items-center gap-2 text-sm font-medium">
+            <SlidersHorizontal className="size-4 text-[var(--color-ink-muted)]" />
+            Filters
+            {activeFilters > 0 && (
+              <span className="text-[var(--color-accent)]">· {activeFilters} on</span>
             )}
-          </nav>
-        </>
-      )}
+          </summary>
+          <div className="mt-4">
+            <FacetPanel facets={result.facets} params={params} raw={raw} />
+          </div>
+        </details>
+
+        <div className="min-w-0">
+          {result.hits.length === 0 ? (
+            <EmptyState
+              icon={params.q ? <SearchIcon /> : <SlidersHorizontal />}
+              title={
+                stale
+                  ? 'Nothing on this page'
+                  : params.q
+                    ? `Nothing matches "${params.q}"`
+                    : emptyFilterTitle
+              }
+              description={
+                stale
+                  ? 'The library changed since this page was loaded.'
+                  : params.q
+                    ? 'Try fewer words, or check the spelling. Search tolerates small typos, and you can exclude a term with a minus, like: dragon -blue'
+                    : 'Loosen or clear the filters to see more.'
+              }
+              action={
+                <Button asChild variant="secondary">
+                  {stale ? (
+                    <Link href={buildHref(raw, {})}>Back to the start</Link>
+                  ) : (
+                    <Link href="/models">Clear everything</Link>
+                  )}
+                </Button>
+              }
+            />
+          ) : (
+            <>
+              <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 xl:grid-cols-4">
+                {result.hits.map((hit) => (
+                  <ModelCard
+                    key={hit.id}
+                    publicId={hit.publicId}
+                    name={hit.name}
+                    path={hit.path}
+                    fileCount={hit.fileCount}
+                    totalSize={hit.totalSize}
+                    libraryName={hit.libraryName}
+                    previewExtension={hit.previewExtension}
+                    isPackage={hit.isPackage}
+                    previewImageFileId={hit.previewImageFileId}
+                    thumbFileId={hit.thumbFileId}
+                    thumbKey={hit.thumbKey}
+                    dimensions={formatDimensions(hit.bboxX ?? 0, hit.bboxY ?? 0, hit.bboxZ ?? 0)}
+                  />
+                ))}
+              </div>
+
+              <Pagination raw={raw} page={page} result={result} />
+            </>
+          )}
+        </div>
+      </div>
     </>
+  )
+}
+
+/**
+ * Previous / next, and where you are.
+ *
+ * Cursor paging can only step, not jump; the page number rides along in the
+ * URL purely to be shown. Stepping back to the first page drops the cursor,
+ * so the first page always has the same plain URL.
+ */
+function Pagination({ raw, page, result }: { raw: RawParams; page: number; result: SearchResult }) {
+  const totalPages = Math.max(1, Math.ceil(result.total / PAGE_SIZE))
+  let current = page
+  let previous: Route | null
+  let next: Route | null
+
+  if (result.cursors) {
+    // No way back means this is the start, whatever the URL claimed.
+    if (!result.cursors.previous) current = 1
+    previous = !result.cursors.previous
+      ? null
+      : current <= 2
+        ? buildHref(raw, {})
+        : buildHref(raw, {
+            page: String(current - 1),
+            before: result.cursors.previous,
+            after: null,
+          })
+    next = result.cursors.next
+      ? buildHref(raw, { page: String(current + 1), after: result.cursors.next, before: null })
+      : null
+  } else {
+    previous = page > 1 ? buildHref(raw, { page: String(page - 1) }) : null
+    next = page < totalPages ? buildHref(raw, { page: String(page + 1) }) : null
+  }
+
+  if (!previous && !next) return null
+  return (
+    <nav className="mt-8 flex items-center justify-between gap-4" aria-label="Pagination">
+      <PageLink href={previous}>
+        <ChevronLeft />
+        Previous
+      </PageLink>
+      <span className="text-sm text-[var(--color-ink-muted)]">
+        Page {NUMBER.format(Math.min(current, totalPages))} of {NUMBER.format(totalPages)}
+      </span>
+      <PageLink href={next}>
+        Next
+        <ChevronRight />
+      </PageLink>
+    </nav>
+  )
+}
+
+function PageLink({ href, children }: { href: Route | null; children: React.ReactNode }) {
+  if (!href) {
+    return (
+      <Button variant="secondary" size="sm" disabled>
+        {children}
+      </Button>
+    )
+  }
+  return (
+    <Button asChild variant="secondary" size="sm">
+      <Link href={href}>{children}</Link>
+    </Button>
+  )
+}
+
+function countActiveFilters(params: ParsedSearchParams): number {
+  return (
+    params.library.length +
+    params.creator.length +
+    params.tag.length +
+    params.license.length +
+    params.format.length +
+    [
+      params.presupported,
+      params.neverPrinted,
+      params.missingPreview,
+      params.minSize !== undefined,
+      params.type !== undefined,
+    ].filter(Boolean).length
   )
 }

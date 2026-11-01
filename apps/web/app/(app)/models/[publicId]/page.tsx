@@ -659,7 +659,7 @@ export default async function ModelPage({ params }: { params: Promise<{ publicId
                     Creator
                   </p>
                   <Link
-                    href={`/search?creator=${encodeURIComponent(creatorId ?? '')}` as Route}
+                    href={`/models?creator=${encodeURIComponent(creatorId ?? '')}` as Route}
                     className="mt-0.5 block text-[var(--color-accent)] hover:underline"
                   >
                     {creator}
@@ -711,7 +711,7 @@ export default async function ModelPage({ params }: { params: Promise<{ publicId
                     {tags.map((tag) => (
                       <Link
                         key={tag}
-                        href={`/search?q=${encodeURIComponent(tag)}` as Route}
+                        href={`/models?q=${encodeURIComponent(tag)}` as Route}
                         className="rounded-full bg-[var(--color-surface-2)] px-2 py-0.5 text-xs text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
                       >
                         {tag}

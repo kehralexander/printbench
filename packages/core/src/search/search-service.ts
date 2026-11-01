@@ -47,7 +47,12 @@ export interface SearchFilters {
 export interface SearchOptions extends SearchFilters {
   sort?: SortOrder
   limit?: number
+  /** Ignored when a cursor is given. */
   offset?: number
+  /** Cursor from `cursors.next`: the page after it. */
+  after?: string
+  /** Cursor from `cursors.previous`: the page before it. */
+  before?: string
   /** Skip facet queries when the caller only needs hits and a total. */
   includeFacets?: boolean
 }
@@ -92,6 +97,11 @@ export interface SearchResult {
   facets: SearchFacets
   /** Echoed back so the UI can show what was actually applied. */
   appliedQuery: string
+  /**
+   * For every sort but relevance-with-a-query, cursors to the pages either
+   * side, null at either end; null altogether when only offset paging works.
+   */
+  cursors: { next: string | null; previous: string | null } | null
 }
 
 /** Above this, a query is treated as prose rather than a name fragment. */
@@ -134,15 +144,29 @@ export async function searchModels(
 ): Promise<SearchResult> {
   const query = (options.query ?? '').trim().slice(0, MAX_QUERY_LENGTH)
   const limit = Math.min(Math.max(options.limit ?? DEFAULT_LIMIT, 1), 200)
-  const offset = Math.max(options.offset ?? 0, 0)
   const sort = options.sort ?? (query ? 'relevance' : 'name')
+  const key = seekKey(sort, query)
+  const cursor = key ? decodeCursor(key, options.before ?? options.after) : null
+  const backward = cursor !== null && options.before !== undefined
+  // A cursor replaces the offset; mixing the two would skip rows twice.
+  const offset = cursor ? 0 : Math.max(options.offset ?? 0, 0)
 
   await applyTrigramThreshold(db)
 
   const where = buildWhere(query, options)
-  const order = buildOrder(sort, query)
+  const order = buildOrder(sort, query, backward)
+  const seek = key && cursor ? sql`AND ${seekPredicate(key, cursor, backward)}` : sql``
 
-  const rows = await db.execute<{
+  /*
+   * The page is picked first, by id, and only its rows get the thumbnail,
+   * geometry and format lookups. Picking and decorating in one go makes
+   * Postgres decorate every row it skips over on the way to the page.
+   *
+   * The total is a scalar subquery in the same statement rather than a
+   * second query: the trigram threshold above is a session setting, and a
+   * second query could land on another pooled connection without it.
+   */
+  const result = await db.execute<{
     id: string
     public_id: string
     name: string
@@ -159,14 +183,16 @@ export async function searchModels(
     bbox_y: string | null
     bbox_z: string | null
     rank: number
+    sort_key: string | null
     total: string
   }>(sql`
-    WITH matched AS (
-      SELECT m.id, ${rankExpression(query)} AS rank
+    WITH page AS (
+      SELECT m.id, ${rankExpression(query)} AS rank,
+             ${key ? sql.raw(key.text) : sql`NULL::text`} AS sort_key
       FROM models m
-      ${where}
-    ), counted AS (
-      SELECT count(*)::bigint AS total FROM matched
+      ${where} ${seek}
+      ${order}
+      LIMIT ${limit + 1} OFFSET ${offset}
     )
     SELECT m.id, m.public_id, m.name, m.path, m.file_count, m.total_size, m.is_package,
            l.name AS library_name,
@@ -174,26 +200,42 @@ export async function searchModels(
            CASE WHEN f.category = 'image' THEN f.id END AS preview_image_file_id,
            thumb.id AS thumb_file_id, thumb.thumb_key,
            geometry.bbox_x, geometry.bbox_y, geometry.bbox_z,
-           matched.rank,
-           counted.total
-    FROM matched
-    JOIN models m ON m.id = matched.id
+           page.rank, page.sort_key,
+           (SELECT count(*) FROM models m ${where})::bigint AS total
+    FROM page
+    JOIN models m ON m.id = page.id
     JOIN libraries l ON l.id = m.library_id
     LEFT JOIN model_files f ON f.id = m.preview_file_id
     LEFT JOIN LATERAL (${modelGeometrySql(sql`m.id`, sql`m.preview_file_id`)}) geometry ON true
     LEFT JOIN LATERAL (${modelThumbnailSql(sql`m.id`, sql`m.preview_file_id`)}) thumb ON true
-    CROSS JOIN counted
     ${order}
-    LIMIT ${limit} OFFSET ${offset}
   `)
+
+  const more = result.rows.length > limit
+  const rows = result.rows.slice(0, limit)
+  // Walking backwards fetches in reverse order; put the page the right way up.
+  if (backward) rows.reverse()
+
+  let total = Number(rows[0]?.total ?? 0)
+  // A cursor past the end (the last model on the page was deleted, say) finds
+  // no rows, and with them no total; count separately rather than claim the
+  // library is empty.
+  if (rows.length === 0 && cursor) {
+    const counted = await db.execute<{ total: string }>(
+      sql`SELECT count(*)::bigint AS total FROM models m ${where}`,
+    )
+    total = Number(counted.rows[0]?.total ?? 0)
+  }
 
   const facets =
     options.includeFacets === false
       ? { libraries: [], creators: [], tags: [], licenses: [], extensions: [] }
       : await loadFacets(db, query, options)
 
+  const first = rows[0]
+  const last = rows[rows.length - 1]
   return {
-    hits: rows.rows.map((row) => ({
+    hits: rows.map((row) => ({
       id: row.id,
       publicId: row.public_id,
       name: row.name,
@@ -211,11 +253,102 @@ export async function searchModels(
       bboxZ: row.bbox_z === null ? null : Number(row.bbox_z),
       rank: Number(row.rank),
     })),
-    // Every row carries the same window count; zero rows means zero matches.
-    total: Number(rows.rows[0]?.total ?? 0),
+    total,
     facets,
     appliedQuery: query,
+    cursors: key
+      ? {
+          next: last && (backward || more) ? encodeCursor(last.sort_key ?? '', last.id) : null,
+          previous:
+            first && (cursor || offset > 0) && (!backward || more)
+              ? encodeCursor(first.sort_key ?? '', first.id)
+              : null,
+        }
+      : null,
   }
+}
+
+/**
+ * Keyset ("seek") paging.
+ *
+ * OFFSET makes Postgres walk and throw away every row before the page, so
+ * page 200 of a big library costs 200 pages. A cursor holds the sort value
+ * and id of the row the page starts after, and the next page is a seek past
+ * it — the same cost on page 200 as on page 1.
+ *
+ * Every order except relevance has a stable key to seek on. Relevance is a
+ * computed float that does not survive a round trip through a URL exactly,
+ * and a typed query's results are small enough for OFFSET anyway.
+ */
+interface SeekKey {
+  /** The sort column as text, so a cursor carries it at full precision. */
+  text: string
+  column: string
+  cast: 'text' | 'timestamptz' | 'bigint'
+  descending: boolean
+}
+
+const SEEK_KEYS: Record<Exclude<SortOrder, 'relevance'>, SeekKey> = {
+  name: { text: 'm.name', column: 'm.name', cast: 'text', descending: false },
+  recent: {
+    text: 'm.created_at::text',
+    column: 'm.created_at',
+    cast: 'timestamptz',
+    descending: true,
+  },
+  oldest: {
+    text: 'm.created_at::text',
+    column: 'm.created_at',
+    cast: 'timestamptz',
+    descending: false,
+  },
+  largest: { text: 'm.total_size::text', column: 'm.total_size', cast: 'bigint', descending: true },
+}
+
+function seekKey(sort: SortOrder, query: string): SeekKey | null {
+  if (sort === 'relevance') return query ? null : SEEK_KEYS.name
+  return SEEK_KEYS[sort]
+}
+
+interface Cursor {
+  value: string
+  id: string
+}
+
+/** Postgres' text form of a timestamptz, e.g. `2026-11-01 04:11:42.648123+00`. */
+const TIMESTAMP = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(\.\d{1,6})?([+-]\d{2}(:\d{2})?)?$/
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/** Opaque in the URL; base64url of `[value, id]`. */
+function encodeCursor(value: string, id: string): string {
+  return Buffer.from(JSON.stringify([value, id])).toString('base64url')
+}
+
+/**
+ * Reads a cursor back, or null for anything that is not one this sort could
+ * have made — a hand-edited URL lands on the first page rather than an error.
+ */
+function decodeCursor(key: SeekKey, raw: string | undefined): Cursor | null {
+  if (!raw) return null
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8'))
+  } catch {
+    return null
+  }
+  if (!Array.isArray(parsed) || parsed.length !== 2) return null
+  const [value, id] = parsed as unknown[]
+  if (typeof value !== 'string' || typeof id !== 'string' || !UUID.test(id)) return null
+  if (key.cast === 'bigint' && !/^\d{1,19}$/.test(value)) return null
+  if (key.cast === 'timestamptz' && !TIMESTAMP.test(value)) return null
+  return { value, id }
+}
+
+function seekPredicate(key: SeekKey, cursor: Cursor, backward: boolean): SQL {
+  // Ties on the sort value are broken by id in the same direction, so the
+  // pair compares as one tuple.
+  const after = key.descending !== backward ? sql`<` : sql`>`
+  return sql`(${sql.raw(key.column)}, m.id) ${after} (${cursor.value}::${sql.raw(key.cast)}, ${cursor.id}::uuid)`
 }
 
 /**
@@ -326,24 +459,13 @@ function buildWhere(query: string, filters: SearchFilters): SQL {
   return sql`WHERE ${sql.join(clauses, sql` AND `)}`
 }
 
-function buildOrder(sort: SortOrder, query: string): SQL {
-  switch (sort) {
-    case 'name':
-      return sql`ORDER BY m.name ASC, m.id ASC`
-    case 'recent':
-      return sql`ORDER BY m.created_at DESC, m.id DESC`
-    case 'oldest':
-      return sql`ORDER BY m.created_at ASC, m.id ASC`
-    case 'largest':
-      return sql`ORDER BY m.total_size DESC, m.id ASC`
-    case 'relevance':
-    default:
-      // With no query every rank is zero, so fall back to name rather than
-      // returning rows in whatever order the planner happens to produce.
-      return query
-        ? sql`ORDER BY matched.rank DESC, m.name ASC, m.id ASC`
-        : sql`ORDER BY m.name ASC, m.id ASC`
-  }
+function buildOrder(sort: SortOrder, query: string, backward = false): SQL {
+  const key = seekKey(sort, query)
+  if (!key) return sql`ORDER BY rank DESC, m.name ASC, m.id ASC`
+  // With no query every rank is zero, so relevance falls back to name rather
+  // than whatever order the planner happens to produce.
+  const direction = sql.raw(key.descending !== backward ? 'DESC' : 'ASC')
+  return sql`ORDER BY ${sql.raw(key.column)} ${direction}, m.id ${direction}`
 }
 
 /**

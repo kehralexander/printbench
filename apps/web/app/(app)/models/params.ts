@@ -24,6 +24,9 @@ export interface ParsedSearchParams {
   type?: 'model' | 'package'
   sort: string
   page: number
+  /** Paging cursors; see `searchModels`. */
+  after?: string
+  before?: string
 }
 
 const SORTS = new Set(['relevance', 'name', 'recent', 'oldest', 'largest'])
@@ -35,6 +38,11 @@ function list(value: string | string[] | undefined): string[] {
   // Ids reach SQL as parameters, but keeping obvious rubbish out of the URL
   // state means the UI never renders a filter chip for something invalid.
   return values.filter((item) => item.length > 0 && item.length <= 64)
+}
+
+function cursor(value: string | string[] | undefined): string | undefined {
+  const single = Array.isArray(value) ? value[0] : value
+  return single && single.length <= 512 ? single : undefined
 }
 
 function flag(value: string | string[] | undefined): boolean {
@@ -62,6 +70,8 @@ export function parseSearchParams(raw: RawParams): ParsedSearchParams {
     type: typeValue === 'model' || typeValue === 'package' ? typeValue : undefined,
     sort: sortValue && SORTS.has(sortValue) ? sortValue : 'relevance',
     page: Number.isFinite(pageValue) && pageValue > 0 ? Math.floor(pageValue) : 1,
+    after: cursor(raw.after),
+    before: cursor(raw.before),
   }
 }
 
@@ -70,7 +80,7 @@ export function parseSearchParams(raw: RawParams): ParsedSearchParams {
  *
  * Any change other than the page itself resets to page one — landing on page 7
  * of a result set that now has two pages is the classic faceted-search
- * annoyance.
+ * annoyance. A paging change passes `page` along with its cursor.
  */
 export function buildHref(
   raw: RawParams,
@@ -90,13 +100,17 @@ export function buildHref(
     }
   }
 
-  if (!('page' in changes)) params.delete('page')
+  if (!('page' in changes)) {
+    params.delete('page')
+    params.delete('after')
+    params.delete('before')
+  }
 
   const query = params.toString()
-  // Always a real /search URL, so asserting the Route type is accurate rather
+  // Always a real /models URL, so asserting the Route type is accurate rather
   // than a way around the checker. typedRoutes cannot see through a URL built
   // at runtime.
-  return (query ? `/search?${query}` : '/search') as Route
+  return (query ? `/models?${query}` : '/models') as Route
 }
 
 /** Adds or removes one value from a repeatable param. */

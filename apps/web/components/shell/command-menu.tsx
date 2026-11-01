@@ -162,7 +162,7 @@ export function CommandMenu({
           {query.trim().length > 0 && (
             <Command.Item
               value="see-all-results"
-              onSelect={() => go(`/search?q=${encodeURIComponent(query.trim())}` as Route)}
+              onSelect={() => go(`/models?q=${encodeURIComponent(query.trim())}` as Route)}
               className="flex cursor-pointer items-center gap-2.5 rounded-md px-2 py-2 text-sm text-[var(--color-ink-muted)] data-[selected=true]:bg-[var(--color-accent-soft)] data-[selected=true]:text-[var(--color-accent)]"
             >
               <Search className="size-4 shrink-0" />
@@ -209,11 +209,11 @@ function hrefFor(hit: QuickHit): Route {
     case 'model':
       return `/models/${hit.publicId}` as Route
     case 'tag':
-      return `/search?tag=${hit.id}` as Route
+      return `/models?tag=${hit.id}` as Route
     case 'creator':
-      return `/search?creator=${hit.id}` as Route
+      return `/models?creator=${hit.id}` as Route
     case 'collection':
-      return `/search?collection=${hit.id}` as Route
+      return `/models?collection=${hit.id}` as Route
   }
 }
 

@@ -58,7 +58,7 @@ async function act(
     )
 
     revalidatePath('/tags')
-    revalidatePath('/search')
+    revalidatePath('/models')
     return { ok: true, count: typeof count === 'number' ? count : undefined }
   } catch (error) {
     if (error instanceof BrowseError) return { ok: false, error: error.message }

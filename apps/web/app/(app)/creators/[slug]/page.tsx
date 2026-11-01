@@ -63,7 +63,7 @@ export default async function CreatorPage({ params }: { params: Promise<{ slug: 
         description={creator.notes ?? undefined}
         actions={
           <Button asChild variant="secondary" size="sm">
-            <Link href={`/search?creator=${creator.id}` as Route}>Search within</Link>
+            <Link href={`/models?creator=${creator.id}` as Route}>Search within</Link>
           </Button>
         }
       />

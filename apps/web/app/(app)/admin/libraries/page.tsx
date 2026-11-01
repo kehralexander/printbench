@@ -154,7 +154,7 @@ export default async function LibrariesPage() {
                       */}
                       {(stat?.models ?? 0) > 0 ? (
                         <Link
-                          href={`/search?library=${library.id}`}
+                          href={`/models?library=${library.id}`}
                           className="font-medium text-[var(--color-ink)] underline decoration-[var(--color-border-strong)] underline-offset-2 hover:decoration-[var(--color-accent)]"
                         >
                           {NUMBER.format(stat!.models)} models

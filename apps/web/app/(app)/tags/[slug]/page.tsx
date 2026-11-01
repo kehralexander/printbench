@@ -56,7 +56,7 @@ export default async function TagPage({ params }: { params: Promise<{ slug: stri
         description={`${tag.modelCount} model${tag.modelCount === 1 ? '' : 's'}`}
         actions={
           <Button asChild variant="secondary" size="sm">
-            <Link href={`/search?tag=${tag.id}` as Route}>Search within</Link>
+            <Link href={`/models?tag=${tag.id}` as Route}>Search within</Link>
           </Button>
         }
       />
@@ -73,7 +73,7 @@ export default async function TagPage({ params }: { params: Promise<{ slug: stri
             <p className="mt-4 text-sm text-[var(--color-ink-muted)]">
               Showing {result.hits.length} of {result.total}.{' '}
               <Link
-                href={`/search?tag=${tag.id}` as Route}
+                href={`/models?tag=${tag.id}` as Route}
                 className="text-[var(--color-accent)] hover:underline"
               >
                 See them all in search
