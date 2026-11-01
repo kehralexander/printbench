@@ -36,3 +36,10 @@ tracking release (`v0.7.4-oidc.6`). Not started yet.
 - [ ] **A short link for requesters.** A link or QR code for viewers: "your
       request is printing, 45% done, ready around 16:20", accurate from the
       tracker without anyone updating it by hand.
+
+## Dashboard
+
+- [ ] **Brief printer status on the dashboard.** A compact card per printer:
+      idle or busy, and when busy the file, percentage and "done around" time,
+      linking to the full status page. Read from the worker's snapshots
+      (`printerSnapshots`), so the dashboard never waits on a printer.
