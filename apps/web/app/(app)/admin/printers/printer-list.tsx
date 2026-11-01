@@ -40,6 +40,11 @@ const PROTOCOLS: { value: PrintHostProtocol; label: string; hint: string }[] = [
     hint: 'Usually needs no key on a trusted LAN.',
   },
   {
+    value: 'kx-bridge',
+    label: 'KX-Bridge (Anycubic Kobra X)',
+    hint: 'Moonraker, plus starting on the right ACE slot without the bridge asking.',
+  },
+  {
     value: 'prusalink',
     label: 'PrusaLink (Prusa MK4, XL, Mini)',
     hint: 'The key is on the printer under Settings → Network.',

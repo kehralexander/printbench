@@ -39,7 +39,7 @@ export default async function UnmatchedJobsPage() {
     percent: job.progress != null ? Math.round(job.progress * 100) : null,
     duration: job.printSec ? formatEstimate(job.printSec / 60) : null,
     startedAt: job.startedAt.toISOString(),
-    fetchable: protocol.get(job.hostId) === 'moonraker' || protocol.get(job.hostId) === 'octoprint',
+    fetchable: ['moonraker', 'kx-bridge', 'octoprint'].includes(protocol.get(job.hostId) ?? ''),
   }))
 
   return (

@@ -4,7 +4,9 @@ import { useState, useTransition } from 'react'
 import { CheckCircle2, Loader2, Send, XCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import { listPrintHosts, sendFileToPrinter } from './send-actions'
+import type { SlotAssignment } from '@pb/core'
+import { listPrintHosts, sendFileToPrinter, type SlotChoice } from './send-actions'
+import { SlotChooser } from './slot-chooser'
 
 /**
  * Sends a sliced file to a configured printer.
@@ -19,11 +21,17 @@ export function SendToPrinter({ fileId, filename }: { fileId: string; filename: 
   const [startPrint, setStartPrint] = useState(false)
   const [status, setStatus] = useState<{ ok: boolean; text: string } | null>(null)
   const [pending, startTransition] = useTransition()
+  const [choosing, setChoosing] = useState<{ hostId: string; choice: SlotChoice } | null>(null)
 
-  function send(hostId: string) {
+  function send(hostId: string, slots?: SlotAssignment[]) {
     setStatus(null)
     startTransition(async () => {
-      const result = await sendFileToPrinter(fileId, hostId, startPrint)
+      const result = await sendFileToPrinter(fileId, hostId, startPrint, { slots })
+      if (!result.ok && result.choose) {
+        setChoosing({ hostId, choice: result.choose })
+        return
+      }
+      setChoosing(null)
       setStatus(result.ok ? { ok: true, text: result.message } : { ok: false, text: result.error })
     })
   }
@@ -34,6 +42,7 @@ export function SendToPrinter({ fileId, filename }: { fileId: string; filename: 
         if (!open) return
         // The result of the last send is stale the moment it is reopened.
         setStatus(null)
+        setChoosing(null)
         if (loaded) return
         void listPrintHosts().then((found) => {
           setHosts(found)
@@ -48,8 +57,17 @@ export function SendToPrinter({ fileId, filename }: { fileId: string; filename: 
         </Button>
       </PopoverTrigger>
 
-      <PopoverContent className="w-72 p-1">
-        {!loaded ? (
+      <PopoverContent className={choosing ? 'w-80 p-1' : 'w-72 p-1'}>
+        {choosing ? (
+          <div className="p-2">
+            <SlotChooser
+              choice={choosing.choice}
+              pending={pending}
+              onStart={(slots) => send(choosing.hostId, slots)}
+              onCancel={() => setChoosing(null)}
+            />
+          </div>
+        ) : !loaded ? (
           <p className="p-3 text-xs text-[var(--color-ink-muted)]">Looking for printers…</p>
         ) : hosts.length === 0 ? (
           <p className="p-3 text-xs text-[var(--color-ink-muted)]">

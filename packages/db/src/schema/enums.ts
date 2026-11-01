@@ -75,6 +75,8 @@ export const printHostProtocol = pgEnum('print_host_protocol', [
   'octoprint',
   'moonraker',
   'prusalink',
+  // Moonraker as KX-Bridge speaks it, plus its own print start with slot choice.
+  'kx-bridge',
 ])
 
 export const listKind = pgEnum('list_kind', ['normal', 'liked'])

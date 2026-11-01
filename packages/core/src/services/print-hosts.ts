@@ -7,6 +7,9 @@
  *   moonraker  POST /server/files/upload    X-Api-Key (often none on a LAN)
  *   prusalink  PUT  /api/v1/files/usb/...   X-Api-Key
  *
+ * KX-Bridge is Moonraker for an Anycubic Kobra X, and is treated as Moonraker
+ * everywhere except starting a print, which names the slots — see kx-bridge.ts.
+ *
  * Bambu is deliberately absent. Its printers have no simple HTTP upload —
  * pushing to one means FTPS plus MQTT with LAN mode enabled and an access code,
  * which is a week of work and the flakiest path of the lot. Handing the file to
@@ -14,7 +17,12 @@
  * more reliable. See slicers.ts.
  */
 
-export type PrintHostProtocol = 'octoprint' | 'moonraker' | 'prusalink'
+export type PrintHostProtocol = 'octoprint' | 'moonraker' | 'prusalink' | 'kx-bridge'
+
+/** Speaks Moonraker's API for status, uploads and downloads. */
+export function isMoonraker(protocol: PrintHostProtocol): boolean {
+  return protocol === 'moonraker' || protocol === 'kx-bridge'
+}
 
 export interface PrintHostConfig {
   id: string
@@ -52,9 +60,9 @@ export function canSendToPrinter(extension: string): boolean {
 /** Ten seconds is generous for a status probe on a LAN and short enough to fail fast. */
 const PROBE_TIMEOUT_MS = 10_000
 /** Uploads are slow on a Pi; a large gcode over wifi legitimately takes minutes. */
-const UPLOAD_TIMEOUT_MS = 10 * 60 * 1000
+export const UPLOAD_TIMEOUT_MS = 10 * 60 * 1000
 
-function baseUrl(endpoint: string): string {
+export function baseUrl(endpoint: string): string {
   return endpoint.replace(/\/+$/, '')
 }
 
@@ -86,12 +94,11 @@ export async function probeHost(
   const headers: Record<string, string> = {}
   if (host.apiKey) headers['x-api-key'] = host.apiKey
 
-  const url =
-    host.protocol === 'moonraker'
-      ? `${base}/printer/info`
-      : host.protocol === 'prusalink'
-        ? `${base}/api/version`
-        : `${base}/api/version`
+  const url = isMoonraker(host.protocol)
+    ? `${base}/printer/info`
+    : host.protocol === 'prusalink'
+      ? `${base}/api/version`
+      : `${base}/api/version`
 
   try {
     const response = await fetchImpl(url, {
@@ -160,6 +167,7 @@ export async function sendToPrinter(
         )
 
       case 'moonraker':
+      case 'kx-bridge':
         return await uploadMultipart(
           fetchImpl,
           `${base}/server/files/upload`,
@@ -225,12 +233,11 @@ export async function downloadFromPrinter(
   }
   const encoded = relative.split('/').map(encodeURIComponent).join('/')
   const base = baseUrl(host.endpoint)
-  const url =
-    host.protocol === 'moonraker'
-      ? `${base}/server/files/gcodes/${encoded}`
-      : host.protocol === 'octoprint'
-        ? `${base}/downloads/files/local/${encoded}`
-        : null
+  const url = isMoonraker(host.protocol)
+    ? `${base}/server/files/gcodes/${encoded}`
+    : host.protocol === 'octoprint'
+      ? `${base}/downloads/files/local/${encoded}`
+      : null
   if (!url) return { ok: false, error: `${host.name} cannot hand files back. Upload it instead.` }
 
   const headers: Record<string, string> = {}
@@ -263,7 +270,7 @@ export function printerRelativePath(printerFilename: string): string {
   return (at >= 0 ? clean.slice(at + 'gcodes/'.length) : clean).replace(/^\/+/, '')
 }
 
-async function uploadMultipart(
+export async function uploadMultipart(
   fetchImpl: typeof fetch,
   url: string,
   headers: Record<string, string>,
@@ -293,7 +300,7 @@ async function uploadMultipart(
   }
 }
 
-async function describeHttpError(response: Response): Promise<string> {
+export async function describeHttpError(response: Response): Promise<string> {
   if (response.status === 401 || response.status === 403) {
     return 'The printer rejected the API key.'
   }
@@ -314,7 +321,7 @@ async function describeHttpError(response: Response): Promise<string> {
  * that is switched off or a hostname that does not resolve, and saying so
  * saves a support round trip.
  */
-function describeNetworkError(error: unknown, endpoint: string): string {
+export function describeNetworkError(error: unknown, endpoint: string): string {
   if (error instanceof Error && error.name === 'TimeoutError') {
     return `${endpoint} did not respond. Is the printer switched on?`
   }

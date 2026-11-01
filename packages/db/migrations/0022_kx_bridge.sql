@@ -1,0 +1,1 @@
+ALTER TYPE "public"."print_host_protocol" ADD VALUE IF NOT EXISTS 'kx-bridge';

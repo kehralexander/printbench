@@ -7,15 +7,36 @@ import {
   canSendToPrinter,
   createStorageAdapter,
   decryptSecret,
+  describeSlot,
+  gcodePaints,
   libraryLocationFromRow,
+  planSlots,
+  readKxSlots,
   sendToPrinter,
+  startOnKxBridge,
+  type FilamentSlot,
+  type PrintHostConfig,
+  type SendResult as HostSendResult,
+  type SlotAssignment,
   type StorageAdapter,
+  type WantedFilament,
 } from '@pb/core'
 import { requireUser } from '@pb/auth'
 import { getDb, schema } from '@pb/db'
 import { audit } from '@/lib/audit'
 
-type SendResult = { ok: true; message: string } | { ok: false; error: string }
+/**
+ * Asked for instead of starting, when the slots to print from are not clear:
+ * what the file was sliced with, what is loaded, and the best guess.
+ */
+export interface SlotChoice {
+  printerName: string
+  paints: { paint: number; colorHex: string; material: string; slot: number | null }[]
+  slots: FilamentSlot[]
+}
+
+export type SendResult =
+  { ok: true; message: string } | { ok: false; error: string; choose?: SlotChoice }
 
 /**
  * A sliced file is tens of megabytes at worst. Anything larger is not gcode,
@@ -55,6 +76,12 @@ export async function sendFileToPrinter(
   fileId: string,
   hostId: string,
   startPrint: boolean,
+  options: {
+    /** Slots picked by hand, after a SlotChoice. */
+    slots?: SlotAssignment[]
+    /** What the queue request asks for, to pick the slot by. */
+    wanted?: WantedFilament | null
+  } = {},
 ): Promise<SendResult> {
   try {
     const user = await requireUser()
@@ -107,17 +134,26 @@ export async function sendFileToPrinter(
     const data = await readAll(storage, relativePath)
     const filename = row.file.filename.split('/').pop() ?? 'print.gcode'
 
-    const result = await sendToPrinter(
-      {
-        id: host.id,
-        name: host.name,
-        protocol: host.protocol,
-        endpoint: host.endpoint,
-        apiKey: decryptSecret(host.credentials),
-      },
-      { filename, data },
-      { startPrint },
-    )
+    const config: PrintHostConfig = {
+      id: host.id,
+      name: host.name,
+      protocol: host.protocol,
+      endpoint: host.endpoint,
+      apiKey: decryptSecret(host.credentials),
+    }
+
+    let result: HostSendResult
+    let startedOn: string | null = null
+    if (config.protocol === 'kx-bridge' && startPrint) {
+      const started = await startOnSlots(config, { filename, data }, options)
+      if ('choose' in started) {
+        return { ok: false, error: started.error, choose: started.choose }
+      }
+      result = started.result
+      startedOn = started.startedOn
+    } else {
+      result = await sendToPrinter(config, { filename, data }, { startPrint })
+    }
 
     await audit(
       user,
@@ -127,6 +163,7 @@ export async function sendFileToPrinter(
         printer: host.name,
         file: filename,
         startPrint,
+        slots: startedOn ?? undefined,
         error: result.ok ? undefined : result.error,
       },
     )
@@ -135,12 +172,76 @@ export async function sendFileToPrinter(
     return {
       ok: true,
       message: startPrint
-        ? `Sent to ${host.name} and started.`
+        ? `Sent to ${host.name} and started${startedOn ? ` on ${startedOn}` : ''}.`
         : `Sent to ${host.name}. Start it from the printer.`,
     }
   } catch (error) {
     if (error instanceof PolicyError) return { ok: false, error: 'Not permitted.' }
     return { ok: false, error: 'Could not send the file.' }
+  }
+}
+
+/**
+ * KX-Bridge: start on named slots rather than let the bridge guess and then
+ * ask in its own page. Slots picked by hand are used as given; otherwise they
+ * are worked out, and asked for when that is not certain.
+ */
+async function startOnSlots(
+  host: PrintHostConfig,
+  file: { filename: string; data: Uint8Array<ArrayBuffer> },
+  options: { slots?: SlotAssignment[]; wanted?: WantedFilament | null },
+): Promise<
+  { result: HostSendResult; startedOn: string | null } | { error: string; choose: SlotChoice }
+> {
+  const slots = await readKxSlots(host).catch(() => null)
+  if (!slots) {
+    return {
+      result: { ok: false, error: `Could not read which filament ${host.name} has loaded.` },
+      startedOn: null,
+    }
+  }
+  const loaded = slots.filter((slot) => slot.loaded)
+  // No ACE to choose from: the bridge's own start is all there is.
+  if (loaded.length === 0) {
+    return { result: await sendToPrinter(host, file, { startPrint: true }), startedOn: null }
+  }
+
+  const paints = gcodePaints(file.data)
+  let assignments: SlotAssignment[]
+  if (options.slots && options.slots.length > 0) {
+    const usable = new Set(loaded.map((slot) => slot.index))
+    if (options.slots.some((choice) => !usable.has(choice.slot))) {
+      return {
+        result: { ok: false, error: 'A chosen slot is empty now. Open the send again.' },
+        startedOn: null,
+      }
+    }
+    assignments = options.slots
+  } else {
+    const plan = planSlots(paints, slots, options.wanted ?? null)
+    if (!plan.sure) {
+      return {
+        error: 'Choose which slot to print from.',
+        choose: {
+          printerName: host.name,
+          paints: plan.paints.map(({ paint, colorHex, material, slot }) => ({
+            paint,
+            colorHex,
+            material,
+            slot,
+          })),
+          slots: loaded,
+        },
+      }
+    }
+    assignments = plan.paints.map(({ paint, slot }) => ({ paint, slot: slot! }))
+  }
+
+  const result = await startOnKxBridge(host, file, paints, assignments, slots)
+  const bySlot = new Map(slots.map((slot) => [slot.index, slot]))
+  return {
+    result,
+    startedOn: assignments.map(({ slot }) => describeSlot(bySlot.get(slot), slot)).join(', '),
   }
 }
 

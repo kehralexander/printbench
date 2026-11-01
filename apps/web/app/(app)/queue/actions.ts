@@ -27,12 +27,13 @@ import {
   type PrintRequestPriority,
   type PrintRequestStatus,
   type RequestPatch,
+  type SlotAssignment,
 } from '@pb/core'
 import { requireUser } from '@pb/auth'
 import { getDb, schema } from '@pb/db'
 import { and, eq, inArray, isNull } from 'drizzle-orm'
 import { audit } from '@/lib/audit'
-import { sendFileToPrinter } from '../models/[publicId]/send-actions'
+import { sendFileToPrinter, type SendResult } from '../models/[publicId]/send-actions'
 
 type Result = { ok: true } | { ok: false; error: string }
 
@@ -248,7 +249,9 @@ export async function setStatus(requestId: string, status: PrintRequestStatus): 
 export async function sendRequestToPrinter(
   requestId: string,
   hostId: string,
-): Promise<{ ok: true; message: string } | { ok: false; error: string }> {
+  /** Slots picked by hand, when a KX-Bridge send asked for them. */
+  slots?: SlotAssignment[],
+): Promise<SendResult> {
   try {
     const authorized = await authorize(requestId, 'run')
     if (!authorized.ok) return authorized
@@ -284,7 +287,14 @@ export async function sendRequestToPrinter(
       return { ok: false, error: `${host.name} is busy printing ${what}.` }
     }
 
-    const sent = await sendFileToPrinter(request.modelFileId, host.id, true)
+    const sent = await sendFileToPrinter(request.modelFileId, host.id, true, {
+      slots,
+      wanted: {
+        material: request.material,
+        colorHex: request.colorHex,
+        spoolmanSpoolId: request.spoolmanSpoolId,
+      },
+    })
     if (!sent.ok) return sent
 
     if (request.status !== 'printing') {

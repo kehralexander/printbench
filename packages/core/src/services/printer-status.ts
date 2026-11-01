@@ -99,6 +99,7 @@ export async function readPrinterStatus(
   try {
     switch (host.protocol) {
       case 'moonraker':
+      case 'kx-bridge':
         return moonrakerStatus(
           asRecord(
             asRecord(

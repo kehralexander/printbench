@@ -155,6 +155,13 @@
       "when": 1791380559156,
       "tag": "0021_queue_followups",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1791380559157,
+      "tag": "0022_kx_bridge",
+      "breakpoints": true
     }
   ]
 }
