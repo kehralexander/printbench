@@ -100,6 +100,10 @@ export interface PrintRequest {
   spoolmanSpoolId: number | null
   /** Grams for one print, from the chosen G-code. */
   filamentG: number | null
+  /** Prints finished towards `quantity`, counted from the printer. */
+  printsDone: number
+  /** The printer it is on, while a watched printer is printing it. */
+  live: LivePrint | null
 
   dueAt: Date | null
   closedAt: Date | null
@@ -109,6 +113,16 @@ export interface PrintRequest {
   createdByName: string | null
   createdAt: Date
 }
+
+export interface LivePrint {
+  printerName: string
+  /** Null when the printer's last status is too old to trust. */
+  progress: number | null
+  remainingMin: number | null
+}
+
+/** A printer status older than this is not "live" any more. */
+const LIVE_STATUS_MAX_AGE = sql`interval '2 minutes'`
 
 export interface QueueStats {
   waiting: number
@@ -310,6 +324,19 @@ async function readPlate(
     durationMin:
       minutes != null && minutes >= 1 && minutes <= MAX_ESTIMATE_MIN ? Math.round(minutes) : null,
     filamentG: grams != null && grams > 0 && grams < 100_000 ? Math.ceil(grams) : null,
+  }
+}
+
+/** Grams of filament the slicer says one print of this file takes, or null. */
+export async function plateFilamentG(
+  db: Database,
+  modelId: string,
+  modelFileId: string | null,
+): Promise<number | null> {
+  try {
+    return (await readPlate(db, modelId, modelFileId)).filamentG
+  } catch {
+    return null
   }
 }
 
@@ -602,6 +629,10 @@ export async function setRequestStatus(
               : sql`NULL`
         },
         print_run_id = ${printRunId},
+        -- Only a printer job still running keeps the request attached to it.
+        printer_job_id = ${next === 'printing' ? sql`printer_job_id` : sql`NULL`},
+        -- Reopening a finished request asks for the whole quantity again.
+        prints_done = ${current.status === 'done' && !closed ? sql`0` : sql`prints_done`},
         updated_at = now()
     WHERE id = ${requestId}`)
 }
@@ -718,6 +749,10 @@ type Row = {
   started_at: string | null
   spoolman_spool_id: number | null
   filament_g: number | null
+  prints_done: number
+  live_printer: string | null
+  live_progress: number | null
+  live_remaining_sec: number | null
   due_at: string | null
   closed_at: string | null
   print_run_id: string | null
@@ -736,8 +771,17 @@ const SELECT_REQUEST = sql`
          r.model_file_id, mf.filename,
          r.quantity, r.priority, r.status, r.material, r.color_hex, r.color_name,
          r.estimated_min, r.started_at, r.spoolman_spool_id, r.filament_g, r.due_at, r.closed_at, r.print_run_id,
+         r.prints_done, lh.name AS live_printer,
+         CASE WHEN lh.fresh THEN (lh.status->>'progress')::float END AS live_progress,
+         CASE WHEN lh.fresh THEN (lh.status->>'remainingSec')::float END AS live_remaining_sec,
          r.created_by, u.name AS created_by_name, r.created_at
   FROM print_requests r
+  LEFT JOIN printer_jobs pj ON pj.id = r.printer_job_id AND pj.finished_at IS NULL
+  LEFT JOIN LATERAL (
+    SELECT h.name, h.status,
+           (h.status_at > now() - ${LIVE_STATUS_MAX_AGE} AND (h.status->>'busy')::boolean) AS fresh
+    FROM print_hosts h WHERE h.id = pj.host_id
+  ) lh ON true
   LEFT JOIN models m ON m.id = r.model_id
   LEFT JOIN model_files mf ON mf.id = r.model_file_id
   LEFT JOIN "user" u ON u.id = r.created_by`
@@ -766,6 +810,14 @@ function toRequest(row: Row): PrintRequest {
     startedAt: row.started_at ? new Date(row.started_at) : null,
     spoolmanSpoolId: row.spoolman_spool_id,
     filamentG: row.filament_g,
+    printsDone: row.prints_done,
+    live: row.live_printer
+      ? {
+          printerName: row.live_printer,
+          progress: row.live_progress,
+          remainingMin: row.live_remaining_sec != null ? row.live_remaining_sec / 60 : null,
+        }
+      : null,
     dueAt: row.due_at ? new Date(row.due_at) : null,
     closedAt: row.closed_at ? new Date(row.closed_at) : null,
     printRunId: row.print_run_id,
@@ -856,16 +908,30 @@ export async function queueStats(db: Database): Promise<QueueStats> {
            )::int AS overdue,
            coalesce(sum(
              CASE
-               WHEN status = 'requested' THEN estimated_min * quantity
+               WHEN status = 'requested' THEN estimated_min * left_to_print
+               -- On a watched printer: what it says is left of this print,
+               -- then the estimate for each one after it.
+               WHEN status = 'printing' AND live_min IS NOT NULL
+                 THEN live_min + coalesce(estimated_min, 0) * greatest(0, left_to_print - 1)
                -- Never negative: a print running long has not given time back.
-               WHEN status = 'printing' THEN greatest(0, estimated_min * quantity
+               WHEN status = 'printing' THEN greatest(0, estimated_min * left_to_print
                  - extract(epoch FROM now() - coalesce(started_at, now())) / 60)
              END
            ), 0)::int AS remaining_min,
            count(*) FILTER (
              WHERE status IN ('requested', 'printing') AND estimated_min IS NULL
+               AND NOT (live_min IS NOT NULL AND left_to_print <= 1)
            )::int AS unestimated
-    FROM print_requests`)
+    FROM (
+      SELECT r.status, r.due_at, r.estimated_min, r.started_at,
+             greatest(1, r.quantity - r.prints_done) AS left_to_print,
+             (SELECT (h.status->>'remainingSec')::float / 60
+              FROM printer_jobs pj JOIN print_hosts h ON h.id = pj.host_id
+              WHERE pj.id = r.printer_job_id AND pj.finished_at IS NULL
+                AND h.status_at > now() - ${LIVE_STATUS_MAX_AGE}
+                AND (h.status->>'busy')::boolean) AS live_min
+      FROM print_requests r
+    ) print_requests`)
 
   const row = result.rows[0]
   return {

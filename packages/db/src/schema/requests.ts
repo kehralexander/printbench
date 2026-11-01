@@ -74,6 +74,11 @@ export const printRequests = pgTable(
     /** Filament for one print in grams, read from the chosen G-code file. */
     filamentG: integer('filament_g'),
 
+    /** Prints finished so far, towards `quantity`, as counted from the printer. */
+    printsDone: integer('prints_done').notNull().default(0),
+    /** The printer job it is on right now, while one is. */
+    printerJobId: uuid('printer_job_id'),
+
     /**
      * The print history entry created when this was marked printed.
      *

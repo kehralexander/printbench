@@ -18,6 +18,7 @@ import {
   type PrintRequestPriority,
   type PrintRequestStatus,
 } from '@pb/core/requests'
+import type { FilamentSlot, LivePrint, LoadedVerdict } from '@pb/core'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/cn'
@@ -25,6 +26,7 @@ import type { FilamentOption } from '@/lib/filament-options'
 import { ClockTime } from '@/components/ui/clock-time'
 import { LinkPicker } from './link-picker'
 import { RequestEditor } from './request-editor'
+import { SendButton } from './send-button'
 import { removeRequest, setRequestModel, setStatus } from './actions'
 
 export interface SpoolBadge {
@@ -32,6 +34,13 @@ export interface SpoolBadge {
   archived: boolean
   /** Spoolman's page for the spool. */
   url: string | null
+}
+
+/** A printer the row can send to; `busy` is the worker's last reading. */
+export interface SendTarget {
+  id: string
+  name: string
+  busy: boolean
 }
 
 export interface QueueRow {
@@ -54,6 +63,16 @@ export interface QueueRow {
   spool: SpoolBadge | null
   /** Grams for one print, from the chosen G-code. */
   filamentG: number | null
+  /** Prints finished towards `quantity`. */
+  printsDone: number
+  /** The watched printer it is on, with its live progress. */
+  live: LivePrint | null
+  /** ISO; when the print on the printer should finish, from `live`. */
+  liveDoneAt: string | null
+  /** Whether the asked-for filament is in a printer's slots; null when unknowable. */
+  loaded: LoadedVerdict | null
+  /** The chosen file is sliced output a printer accepts. */
+  sendable: boolean
   /** ISO strings: Dates do not need to survive the round trip, only render. */
   dueAt: string | null
   createdAt: string
@@ -86,10 +105,13 @@ export function RequestRow({
   request,
   canRun,
   filaments,
+  sendTargets,
 }: {
   request: QueueRow
   canRun: boolean
   filaments: FilamentOption[]
+  /** Printers to offer Send & start for; empty when the user may not send. */
+  sendTargets: SendTarget[]
 }) {
   const router = useRouter()
   const [error, setError] = useState<string | null>(null)
@@ -121,14 +143,16 @@ export function RequestRow({
   }
 
   const look = [request.material, request.colorName].filter(Boolean).join(' · ')
+  // Prints still to do: the rest of the quantity once some are done.
+  const left = Math.max(1, request.quantity - request.printsDone)
   const estimate =
     request.estimatedMin != null
-      ? request.quantity > 1
-        ? `~${formatEstimate(request.estimatedMin * request.quantity)} (${request.quantity} × ${formatEstimate(request.estimatedMin)})`
+      ? left > 1
+        ? `~${formatEstimate(request.estimatedMin * left)} (${left} × ${formatEstimate(request.estimatedMin)})`
         : `~${formatEstimate(request.estimatedMin)}`
       : null
 
-  const neededG = request.filamentG != null ? request.filamentG * request.quantity : null
+  const neededG = request.filamentG != null ? request.filamentG * left : null
   // Only a warning while it still matters, and only with both numbers known.
   const short =
     !closed &&
@@ -138,6 +162,7 @@ export function RequestRow({
 
   const details = [
     request.requestedBy && `for ${request.requestedBy}`,
+    request.printsDone > 0 && `${request.printsDone} of ${request.quantity} printed`,
     look,
     request.filename,
     !closed && estimate,
@@ -227,28 +252,47 @@ export function RequestRow({
             {short && (
               <span className="text-[var(--color-danger)]">
                 {' '}
-                · not enough for {request.quantity > 1 ? `all ${request.quantity}` : 'this'} (needs
-                ~{neededG} g)
+                · not enough for {left > 1 ? `all ${left}` : 'this'} (needs ~{neededG} g)
               </span>
             )}
           </p>
         )}
 
-        {request.status === 'printing' && request.startedAt && (
+        {request.status === 'printing' && request.live ? (
           <p className="mt-0.5 text-xs text-[var(--color-ink-muted)]">
-            On the printer since <ClockTime value={request.startedAt} />
-            {request.estimatedMin != null && (
+            <Link href="/printers" className="text-[var(--color-accent)] hover:underline">
+              On {request.live.printerName}
+            </Link>
+            {request.live.progress != null && ` · ${Math.round(request.live.progress * 100)}%`}
+            {request.liveDoneAt && (
               <>
                 {' · done around '}
-                <ClockTime
-                  value={new Date(
-                    new Date(request.startedAt).getTime() +
-                      request.estimatedMin * request.quantity * 60_000,
-                  ).toISOString()}
-                />
+                <ClockTime value={request.liveDoneAt} />
               </>
             )}
+            {left > 1 && `, then ${left - 1} more`}
           </p>
+        ) : (
+          request.status === 'printing' &&
+          request.startedAt && (
+            <p className="mt-0.5 text-xs text-[var(--color-ink-muted)]">
+              On the printer since <ClockTime value={request.startedAt} />
+              {request.estimatedMin != null && (
+                <>
+                  {' · done around '}
+                  <ClockTime
+                    value={new Date(
+                      new Date(request.startedAt).getTime() + request.estimatedMin * left * 60_000,
+                    ).toISOString()}
+                  />
+                </>
+              )}
+            </p>
+          )
+        )}
+
+        {request.loaded && request.status === 'requested' && (
+          <LoadedHint verdict={request.loaded} />
         )}
 
         {request.notes && (
@@ -296,6 +340,21 @@ export function RequestRow({
                 <span className="hidden sm:inline">Start</span>
               </Button>
             )}
+
+            {canRun &&
+              request.status === 'requested' &&
+              request.sendable &&
+              request.filename &&
+              sendTargets.length > 0 && (
+                <SendButton
+                  requestId={request.id}
+                  title={request.title}
+                  filename={request.filename}
+                  targets={sendTargets}
+                  disabled={pending}
+                  onError={setError}
+                />
+              )}
 
             {canRun && request.status === 'printing' && (
               <Button
@@ -379,5 +438,49 @@ export function RequestRow({
         )}
       </div>
     </li>
+  )
+}
+
+/** Whether the filament this asks for is in a printer right now. */
+function LoadedHint({ verdict }: { verdict: LoadedVerdict }) {
+  if (verdict.loaded) {
+    return (
+      <p className="mt-0.5 flex items-center gap-1.5 text-xs text-[var(--color-ink-muted)]">
+        <SlotDot slot={verdict.slot} />
+        Loaded on {verdict.printerName}, slot {verdict.slot.index + 1}
+      </p>
+    )
+  }
+  return (
+    <p className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-[var(--color-danger)]">
+      Not loaded
+      {verdict.instead.length > 0 && (
+        <span className="flex items-center gap-1 text-[var(--color-ink-muted)]">
+          (loaded:
+          {verdict.instead.map((slot) => (
+            <SlotDot key={slot.index} slot={slot} />
+          ))}
+          )
+        </span>
+      )}
+    </p>
+  )
+}
+
+function SlotDot({ slot }: { slot: FilamentSlot }) {
+  const label = [
+    `Slot ${slot.index + 1}`,
+    slot.material,
+    slot.spoolmanSpoolId && `spool #${slot.spoolmanSpoolId}`,
+  ]
+    .filter(Boolean)
+    .join(' · ')
+  return (
+    <span
+      title={label}
+      aria-label={label}
+      className="inline-block size-3 rounded-full ring-1 ring-inset ring-[var(--color-border)]"
+      style={{ backgroundColor: slot.colorHex ?? 'transparent' }}
+    />
   )
 }

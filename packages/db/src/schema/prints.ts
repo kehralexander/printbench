@@ -2,6 +2,7 @@ import {
   boolean,
   index,
   integer,
+  jsonb,
   numeric,
   pgTable,
   smallint,
@@ -87,6 +88,46 @@ export const printHosts = pgTable('print_hosts', {
   /** Encrypted at rest by packages/core/crypto. */
   credentials: text('credentials'),
   lastSeenOk: timestamp('last_seen_ok', { withTimezone: true }),
+  /**
+   * The last status the worker read, and when. Lets the queue show live times
+   * without waiting on a printer that may be switched off.
+   */
+  status: jsonb('status'),
+  statusAt: timestamp('status_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 })
+
+/**
+ * Jobs seen on a printer, as the worker watched them start and end.
+ *
+ * Printers keep little or no history of their own, so this is what turns
+ * "it was printing, now it is not" into a logged print and a queue request
+ * moving along. The model, file, request and run are soft references: a job
+ * outlives any of them being deleted, and simply stops linking.
+ */
+export const printerJobs = pgTable(
+  'printer_jobs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    hostId: uuid('host_id')
+      .notNull()
+      .references(() => printHosts.id, { onDelete: 'cascade' }),
+    /** As the printer names it, directories included. */
+    filename: text('filename').notNull(),
+    modelId: uuid('model_id'),
+    modelFileId: uuid('model_file_id'),
+    requestId: uuid('request_id'),
+    printRunId: uuid('print_run_id'),
+    /** printing, success, cancelled or failed. */
+    status: text('status').notNull().default('printing'),
+    /** Last progress seen, 0–1. */
+    progress: numeric('progress', { precision: 5, scale: 4 }),
+    /** Seconds actually printing, as the printer counts them. */
+    printSec: integer('print_sec'),
+    startedAt: timestamp('started_at', { withTimezone: true }).notNull(),
+    finishedAt: timestamp('finished_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('printer_jobs_host_idx').on(t.hostId, t.startedAt)],
+)

@@ -7,7 +7,7 @@ import { isValidEndpoint, type PrintHostConfig } from './print-hosts'
  * Read-only and best effort. Each protocol reports a different subset, so
  * every field past `state` is optional and the page shows what it gets.
  *
- *   moonraker  GET /printer/objects/query?print_stats&display_status&…
+ *   moonraker  GET /printer/objects/query?print_stats&display_status&…&mmu
  *   octoprint  GET /api/job
  *   prusalink  GET /api/v1/status (+ /api/v1/job for the file name)
  */
@@ -35,6 +35,26 @@ export interface PrinterStatus {
   bed?: Temperature
   /** What the printer says alongside an error, or why it could not be read. */
   message?: string
+  /**
+   * Filament loaded in a multi-material unit, in slot order — an Anycubic ACE
+   * through KX-Bridge, or a Happy Hare MMU. Absent when there is none.
+   */
+  slots?: FilamentSlot[]
+}
+
+export interface FilamentSlot {
+  /** 0-based, in the unit's own order. */
+  index: number
+  loaded: boolean
+  material?: string
+  /** #rrggbb */
+  colorHex?: string
+  /** The filament profile name the unit reports, when it has one. */
+  name?: string
+  /** The Spoolman spool bound to the slot, when the bridge tracks that. */
+  spoolmanSpoolId?: number
+  /** The slot currently feeding the nozzle. */
+  active: boolean
 }
 
 export interface Temperature {
@@ -84,7 +104,7 @@ export async function readPrinterStatus(
             asRecord(
               (
                 await get(
-                  '/printer/objects/query?webhooks&print_stats&display_status&virtual_sdcard&extruder&heater_bed',
+                  '/printer/objects/query?webhooks&print_stats&display_status&virtual_sdcard&extruder&heater_bed&mmu',
                 )
               ).result,
             ).status,
@@ -150,6 +170,7 @@ export function moonrakerStatus(objects: Record<string, unknown>): PrinterStatus
     totalLayers: number(info.total_layer),
     nozzle: temperature(objects.extruder),
     bed: temperature(objects.heater_bed),
+    slots: mmuSlots(objects.mmu),
     message: state === 'error' ? text(stats.message) : undefined,
   })
 }
@@ -291,6 +312,39 @@ function text(value: unknown): string | undefined {
 
 function fraction(value: number | undefined): number | undefined {
   return value == null ? undefined : Math.min(1, Math.max(0, value))
+}
+
+/**
+ * Happy Hare's `mmu` object: parallel arrays, one entry per gate. KX-Bridge
+ * emulates it for the ACE, including `gate_spool_id` from its Spoolman plugin
+ * (-1 for none).
+ */
+export function mmuSlots(value: unknown): FilamentSlot[] | undefined {
+  const mmu = asRecord(value)
+  const statuses = Array.isArray(mmu.gate_status) ? mmu.gate_status : null
+  if (!statuses || statuses.length === 0) return undefined
+  const at = (key: string, index: number): unknown => {
+    const list = mmu[key]
+    return Array.isArray(list) ? list[index] : undefined
+  }
+  const active = number(mmu.gate)
+  return statuses.map((status, index) => {
+    // Happy Hare: -1 unknown, 0 empty, 1 available, 2 available from buffer.
+    const loaded = typeof status === 'number' && status > 0
+    const color = text(at('gate_color', index))?.replace(/^#/, '')
+    const spoolId = number(at('gate_spool_id', index))
+    const slot: FilamentSlot = { index, loaded, active: active === index }
+    if (!loaded) return slot
+    const material = text(at('gate_material', index))
+    const name = text(at('gate_filament_name', index))
+    if (material) slot.material = material
+    if (color && /^[0-9a-f]{6}([0-9a-f]{2})?$/i.test(color)) {
+      slot.colorHex = `#${color.slice(0, 6).toLowerCase()}`
+    }
+    if (name) slot.name = name
+    if (spoolId != null && spoolId > 0) slot.spoolmanSpoolId = spoolId
+    return slot
+  })
 }
 
 function temperature(value: unknown): Temperature | undefined {

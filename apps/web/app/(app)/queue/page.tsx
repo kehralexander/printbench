@@ -3,8 +3,11 @@ import type { Route } from 'next'
 import { ClipboardList } from 'lucide-react'
 import {
   can,
+  canSendToPrinter,
   formatEstimate,
   listRequests,
+  loadedFilament,
+  printerSnapshots,
   listSpoolmanSpools,
   spoolmanEnabled,
   spoolmanSpoolLink,
@@ -18,9 +21,10 @@ import { filamentOptions } from '@/lib/filament-options'
 import { PageHeader } from '@/components/shell/page-header'
 import { NotPermitted } from '@/components/shell/not-permitted'
 import { Card } from '@/components/ui/card'
+import { ClockTime } from '@/components/ui/clock-time'
 import { EmptyState } from '@/components/ui/empty-state'
 import { AddRequests } from './add-requests'
-import { RequestRow, type QueueRow, type SpoolBadge } from './request-row'
+import { RequestRow, type QueueRow, type SendTarget, type SpoolBadge } from './request-row'
 
 export const dynamic = 'force-dynamic'
 export const metadata = { title: 'Print queue' }
@@ -49,12 +53,18 @@ export default async function QueuePage({
   const filter = FILTERS.find((option) => option.key === params.filter) ?? FILTERS[0]!
 
   const db = getDb()
-  const [requests, stats, requesters, filaments] = await Promise.all([
+  const [requests, stats, requesters, filaments, printers] = await Promise.all([
     listRequests(db, { status: filter.status, limit: 200 }),
     queueStats(db),
     requesterSuggestions(db),
     filamentOptions(db),
+    printerSnapshots(db),
   ])
+
+  // What the watched printers have loaded, from the worker's last reading.
+  const printerSlots = printers
+    .filter((printer) => printer.fresh && printer.status?.slots)
+    .map((printer) => ({ printerName: printer.name, slots: printer.status!.slots! }))
 
   // Live spool state for the badges. Cached briefly; when Spoolman is down the
   // rows simply show no spool, rather than the page failing.
@@ -74,6 +84,14 @@ export default async function QueuePage({
 
   // Working the queue is a member's job; asking is open to anyone signed in.
   const canRun = can(policyUser, 'request:manage')
+  const sendTargets: SendTarget[] =
+    canRun && can(policyUser, 'printhost:send')
+      ? printers.map((printer) => ({
+          id: printer.id,
+          name: printer.name,
+          busy: printer.fresh && printer.status?.busy === true,
+        }))
+      : []
   const empty = stats.waiting + stats.printing + stats.done + stats.cancelled === 0
 
   const rows: QueueRow[] = requests.map((request) => ({
@@ -92,6 +110,17 @@ export default async function QueuePage({
     spoolmanSpoolId: request.spoolmanSpoolId,
     spool: request.spoolmanSpoolId != null ? (spools.get(request.spoolmanSpoolId) ?? null) : null,
     filamentG: request.filamentG,
+    printsDone: request.printsDone,
+    live: request.live,
+    liveDoneAt: request.live?.remainingMin != null ? finishTime(request.live.remainingMin) : null,
+    loaded:
+      request.status === 'done' || request.status === 'cancelled'
+        ? null
+        : loadedFilament(request, printerSlots),
+    sendable:
+      request.modelFileId != null &&
+      request.filename != null &&
+      canSendToPrinter(request.filename.split('.').pop() ?? ''),
     dueAt: request.dueAt?.toISOString() ?? null,
     createdAt: request.createdAt.toISOString(),
     printRunId: request.printRunId,
@@ -111,6 +140,12 @@ export default async function QueuePage({
         title="Print queue"
         description={empty ? 'Things people have asked you to print.' : summarise(stats)}
       />
+      {stats.remainingMin > 0 && (
+        <p className="-mt-5 mb-6 text-sm text-[var(--color-ink-muted)]">
+          All done around <ClockTime value={finishTime(stats.remainingMin)} />
+          {stats.unestimated > 0 && ', plus whatever has no estimate'}
+        </p>
+      )}
 
       <div className="mb-4">
         <AddRequests requesterSuggestions={requesters} filaments={filaments} />
@@ -169,6 +204,7 @@ export default async function QueuePage({
                 request={request}
                 canRun={canRun}
                 filaments={filaments}
+                sendTargets={sendTargets}
               />
             ))}
           </ul>
@@ -176,6 +212,11 @@ export default async function QueuePage({
       )}
     </>
   )
+}
+
+/** When the open queue is through, printing back to back from now. */
+function finishTime(remainingMin: number): string {
+  return new Date(Date.now() + remainingMin * 60_000).toISOString()
 }
 
 function summarise(stats: {

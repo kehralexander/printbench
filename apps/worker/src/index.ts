@@ -25,6 +25,7 @@ import { handleZipRequest } from './http/zip'
 import { handleUploadRequest } from './http/upload'
 import { createBackupHandler } from './backup/http'
 import { activeWatchCount, startWatchReconciler } from './watch/watcher'
+import { startPrinterWatch } from './printers/watch'
 
 // Must run before anything reads DATABASE_URL.
 loadRootEnv()
@@ -190,12 +191,17 @@ async function startWork(): Promise<void> {
    */
   stopWatching = startWatchReconciler()
   console.log('[worker] watch reconciler started, sweeping every 60s')
+
+  // Printers feed the queue and the print history; see printers/watch.ts.
+  stopPrinters = startPrinterWatch()
 }
 
 /** Stops handlers and watchers, waiting for running jobs to finish. */
 async function pauseWork(): Promise<void> {
   await stopWatching?.()
   stopWatching = undefined
+  await stopPrinters?.()
+  stopPrinters = undefined
   await queue.stop()
   console.log('[worker] job handlers paused')
 }
@@ -227,6 +233,7 @@ async function main(): Promise<void> {
  */
 let shuttingDown = false
 let stopWatching: (() => Promise<void>) | undefined
+let stopPrinters: (() => Promise<void>) | undefined
 async function shutdown(signal: string): Promise<void> {
   if (shuttingDown) return
   shuttingDown = true
@@ -241,6 +248,7 @@ async function shutdown(signal: string): Promise<void> {
   try {
     console.log(`[worker] closing ${activeWatchCount()} filesystem watcher(s)`)
     await stopWatching?.()
+    await stopPrinters?.()
     await new Promise<void>((resolve) => server.close(() => resolve()))
     await queue.stop()
     console.log('[worker] clean shutdown')

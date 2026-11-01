@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { PrintHostConfig } from './print-hosts'
 import {
+  mmuSlots,
   moonrakerStatus,
   octoprintStatus,
   prusalinkStatus,
@@ -190,5 +191,61 @@ describe('prusalink', () => {
       remainingSec: 800,
       nozzle: { actual: 215, target: 215 },
     })
+  })
+})
+
+describe('filament slots (KX-Bridge ACE / Happy Hare)', () => {
+  // What KX-Bridge's _build_mmu_object() returns for an ACE with slot 3 empty.
+  const mmu = {
+    num_gates: 4,
+    gate_status: [1, 1, 0, 1],
+    gate_material: ['PLA', 'PLA MATTE', '', 'PETG'],
+    gate_color: ['FFFFFF', '17223B', '', '101010'],
+    gate_filament_name: ['Generic PLA', 'Generic PLA Matte', '', 'Generic PETG'],
+    gate_spool_id: [12, 17, -1, -1],
+    gate: 1,
+    tool: 1,
+  }
+
+  it('reads each slot in order, with colour, spool and the active one', () => {
+    expect(mmuSlots(mmu)).toEqual([
+      {
+        index: 0,
+        loaded: true,
+        active: false,
+        material: 'PLA',
+        colorHex: '#ffffff',
+        name: 'Generic PLA',
+        spoolmanSpoolId: 12,
+      },
+      {
+        index: 1,
+        loaded: true,
+        active: true,
+        material: 'PLA MATTE',
+        colorHex: '#17223b',
+        name: 'Generic PLA Matte',
+        spoolmanSpoolId: 17,
+      },
+      { index: 2, loaded: false, active: false },
+      {
+        index: 3,
+        loaded: true,
+        active: false,
+        material: 'PETG',
+        colorHex: '#101010',
+        name: 'Generic PETG',
+      },
+    ])
+  })
+
+  it('has no slots without a unit', () => {
+    expect(mmuSlots(undefined)).toBeUndefined()
+    expect(mmuSlots({})).toBeUndefined()
+    expect(moonrakerStatus(kxPrinting).slots).toBeUndefined()
+  })
+
+  it('comes through on the printer status', () => {
+    expect(moonrakerStatus({ ...kxPrinting, mmu }).slots).toHaveLength(4)
   })
 })

@@ -6,13 +6,16 @@ import {
   RequestValidationError,
   assertCan,
   can,
+  canSendToPrinter,
   createRequest,
+  decryptSecret,
   createRequests,
   deleteRequest,
   getRequest,
   linkRequest,
   parseRequestLines,
   quickSearch,
+  readPrinterStatus,
   setRequestStatus,
   suggestEstimate,
   updateRequest,
@@ -26,6 +29,7 @@ import { requireUser } from '@pb/auth'
 import { getDb, schema } from '@pb/db'
 import { and, eq, inArray, isNull } from 'drizzle-orm'
 import { audit } from '@/lib/audit'
+import { sendFileToPrinter } from '../models/[publicId]/send-actions'
 
 type Result = { ok: true } | { ok: false; error: string }
 
@@ -227,6 +231,72 @@ export async function setStatus(requestId: string, status: PrintRequestStatus): 
     return { ok: true }
   } catch (error) {
     return { ok: false, error: describe(error, 'Could not update that request.') }
+  }
+}
+
+/**
+ * Sends a request's sliced file to a printer and starts it, then puts the
+ * request on the printer.
+ *
+ * Asks the printer first rather than trusting the worker's last reading: an
+ * upload with "start" to a printer mid-print is refused at best, and queued
+ * behind the running job at worst, and either is better said before sending.
+ */
+export async function sendRequestToPrinter(
+  requestId: string,
+  hostId: string,
+): Promise<{ ok: true; message: string } | { ok: false; error: string }> {
+  try {
+    const authorized = await authorize(requestId, 'run')
+    if (!authorized.ok) return authorized
+    const { request, user } = authorized
+
+    if (!request.modelFileId || !request.filename) {
+      return { ok: false, error: 'Choose the sliced file to print first.' }
+    }
+    const extension = request.filename.split('.').pop() ?? ''
+    if (!canSendToPrinter(extension)) {
+      return { ok: false, error: 'Only a sliced file can be sent. Choose the G-code to print.' }
+    }
+
+    const [host] = await getDb()
+      .select()
+      .from(schema.printHosts)
+      .where(eq(schema.printHosts.id, hostId))
+      .limit(1)
+    if (!host) return { ok: false, error: 'That printer is no longer configured.' }
+
+    const status = await readPrinterStatus({
+      id: host.id,
+      name: host.name,
+      protocol: host.protocol,
+      endpoint: host.endpoint,
+      apiKey: decryptSecret(host.credentials),
+    })
+    if (status.state === 'offline') {
+      return { ok: false, error: `${host.name} is not answering. ${status.message ?? ''}`.trim() }
+    }
+    if (status.busy) {
+      const what = status.filename ? status.filename.split('/').pop() : 'something else'
+      return { ok: false, error: `${host.name} is busy printing ${what}.` }
+    }
+
+    const sent = await sendFileToPrinter(request.modelFileId, host.id, true)
+    if (!sent.ok) return sent
+
+    if (request.status !== 'printing') {
+      await setRequestStatus(getDb(), requestId, 'printing', { userId: user.id })
+      await audit(
+        user,
+        'request.status_changed',
+        { type: 'request', id: requestId, label: request.title },
+        { from: request.status, to: 'printing', printer: host.name },
+      )
+    }
+    revalidateFor(request)
+    return { ok: true, message: sent.message }
+  } catch (error) {
+    return { ok: false, error: describe(error, 'Could not send that to the printer.') }
   }
 }
 

@@ -3,7 +3,15 @@ import type { Route } from 'next'
 import { eq, sql } from 'drizzle-orm'
 import { Printer } from 'lucide-react'
 import { getSessionUser } from '@pb/auth'
-import { can, decryptSecret, readPrinterStatus, type PrinterStatus } from '@pb/core'
+import {
+  can,
+  decryptSecret,
+  matchLibraryFile,
+  readPrinterStatus,
+  spoolmanSpoolLink,
+  type FilamentSlot,
+  type PrinterStatus,
+} from '@pb/core'
 import { formatEstimate } from '@pb/core/requests'
 import { getDb, schema } from '@pb/db'
 import { PageHeader } from '@/components/shell/page-header'
@@ -24,6 +32,12 @@ interface PrintedFile {
   modelPublicId: string
   modelName: string
   thumbUrl: string | null
+}
+
+/** The queue request the printer's current job is for, when the worker matched one. */
+interface JobRequest {
+  title: string
+  requestedBy: string | null
 }
 
 /**
@@ -85,9 +99,12 @@ export default async function PrintersPage() {
     ).catch(() => undefined)
   }
 
-  const files = await Promise.all(
-    statuses.map((status) => (status.filename ? findPrintedFile(status.filename) : null)),
-  )
+  const [files, jobRequests] = await Promise.all([
+    Promise.all(
+      statuses.map((status) => (status.filename ? findPrintedFile(status.filename) : null)),
+    ),
+    openJobRequests(),
+  ])
   const doneAt = statuses.map(doneAround)
 
   return (
@@ -104,6 +121,7 @@ export default async function PrintersPage() {
             name={host.name}
             status={statuses[index]!}
             file={files[index] ?? null}
+            request={statuses[index]!.busy ? (jobRequests.get(host.id) ?? null) : null}
             doneAt={doneAt[index] ?? null}
           />
         ))}
@@ -112,40 +130,31 @@ export default async function PrintersPage() {
   )
 }
 
-/**
- * Printers report the file by the name it was uploaded under, often with a
- * directory in front. A sliced file in the library with that name is very
- * likely the one — the newest wins if several share it.
- */
 async function findPrintedFile(printerFilename: string): Promise<PrintedFile | null> {
-  const name = printerFilename.split('/').pop()?.trim().toLowerCase()
-  if (!name) return null
-  const rows = await getDb().execute<{
-    file_id: string
-    thumb_state: string | null
-    thumb_key: string | null
-    public_id: string
-    name: string
-  }>(sql`
-    SELECT f.id AS file_id, f.thumb_state, f.thumb_key, m.public_id, m.name
-    FROM model_files f
-    JOIN models m ON m.id = f.model_id
-    WHERE f.missing_at IS NULL AND m.missing_at IS NULL
-      AND f.category = 'slicer'
-      AND lower(regexp_replace(f.filename, '^.*/', '')) = ${name}
-    ORDER BY f.updated_at DESC
-    LIMIT 1
-  `)
-  const row = rows.rows[0]
-  if (!row) return null
+  const file = await matchLibraryFile(getDb(), printerFilename)
+  if (!file) return null
   return {
-    modelPublicId: row.public_id,
-    modelName: row.name,
+    modelPublicId: file.modelPublicId,
+    modelName: file.modelName,
     thumbUrl:
-      row.thumb_state === 'ok' && row.thumb_key
-        ? `/api/files/${row.file_id}/thumb?v=${encodeURIComponent(row.thumb_key)}`
+      file.thumbState === 'ok' && file.thumbKey
+        ? `/api/files/${file.modelFileId}/thumb?v=${encodeURIComponent(file.thumbKey)}`
         : null,
   }
+}
+
+async function openJobRequests(): Promise<Map<string, JobRequest>> {
+  const rows = await getDb().execute<{
+    host_id: string
+    title: string
+    requested_by: string | null
+  }>(sql`
+    SELECT j.host_id, r.title, r.requested_by
+    FROM printer_jobs j JOIN print_requests r ON r.id = j.request_id
+    WHERE j.finished_at IS NULL`)
+  return new Map(
+    rows.rows.map((row) => [row.host_id, { title: row.title, requestedBy: row.requested_by }]),
+  )
 }
 
 /** A paused job has no finish time; it ends whenever someone resumes it. */
@@ -168,11 +177,13 @@ function PrinterCard({
   name,
   status,
   file,
+  request,
   doneAt,
 }: {
   name: string
   status: PrinterStatus
   file: PrintedFile | null
+  request: JobRequest | null
   /** When the job should finish, if the printer is printing and says how long. */
   doneAt: string | null
 }) {
@@ -231,6 +242,15 @@ function PrinterCard({
                 </Link>
               </p>
             )}
+            {request && (
+              <p className="truncate text-xs text-[var(--color-ink-muted)]">
+                For{' '}
+                <Link href="/queue" className="text-[var(--color-accent)] hover:underline">
+                  {request.title}
+                </Link>
+                {request.requestedBy && ` · ${request.requestedBy}`}
+              </p>
+            )}
             {status.layer != null && status.totalLayers != null && status.totalLayers > 0 && (
               <p className="text-xs text-[var(--color-ink-muted)]">
                 Layer {status.layer} of {status.totalLayers}
@@ -283,6 +303,8 @@ function PrinterCard({
         </div>
       )}
 
+      {status.slots && status.slots.length > 0 && <Slots slots={status.slots} />}
+
       {(status.nozzle || status.bed) && (
         <p className="text-xs text-[var(--color-ink-muted)]">
           {status.nozzle && <>Nozzle {temperature(status.nozzle)}</>}
@@ -315,4 +337,54 @@ function temperature({ actual, target }: { actual: number; target: number }): st
   return target > 0
     ? `${Math.round(actual)} / ${Math.round(target)} °C`
     : `${Math.round(actual)} °C`
+}
+
+/** The filament in a multi-material unit, slot by slot, the active one marked. */
+function Slots({ slots }: { slots: FilamentSlot[] }) {
+  return (
+    <ul className="grid grid-cols-2 gap-2 sm:grid-cols-4" aria-label="Loaded filament">
+      {slots.map((slot) => {
+        const link = slot.spoolmanSpoolId != null ? spoolmanSpoolLink(slot.spoolmanSpoolId) : null
+        return (
+          <li
+            key={slot.index}
+            className={
+              slot.active
+                ? 'flex items-center gap-2 rounded-[var(--radius-control)] border border-[var(--color-accent)] px-2 py-1.5'
+                : 'flex items-center gap-2 rounded-[var(--radius-control)] border border-[var(--color-border)] px-2 py-1.5'
+            }
+          >
+            <span
+              className="size-4 shrink-0 rounded-full ring-1 ring-inset ring-[var(--color-border)]"
+              style={{
+                backgroundColor: slot.loaded ? (slot.colorHex ?? 'transparent') : 'transparent',
+              }}
+            />
+            <span className="min-w-0 text-xs">
+              <span className="block font-medium">
+                Slot {slot.index + 1}
+                {slot.active && ' · in use'}
+              </span>
+              <span className="block truncate text-[var(--color-ink-muted)]">
+                {!slot.loaded ? (
+                  'Empty'
+                ) : link ? (
+                  <a
+                    href={link}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-[var(--color-accent)] hover:underline"
+                  >
+                    {slot.material ?? 'Loaded'} · #{slot.spoolmanSpoolId}
+                  </a>
+                ) : (
+                  (slot.material ?? 'Loaded')
+                )}
+              </span>
+            </span>
+          </li>
+        )
+      })}
+    </ul>
+  )
 }
