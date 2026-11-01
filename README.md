@@ -47,6 +47,14 @@ Postgres is the **only** thing it needs. No Redis, no message broker, no Elastic
   <img src="screenshots/print-queue.png" alt="The print queue" width="425">
   <img src="screenshots/print-history.png" alt="Print history" width="425">
 </p>
+<p align="center">
+  <img src="screenshots/dashboard.png" alt="The dashboard" width="425">
+  <img src="screenshots/printers.png" alt="Printer status" width="425">
+</p>
+<p align="center">
+  <img src="screenshots/filaments/library.png" alt="Filament spools" width="425">
+  <img src="screenshots/diagnostics-health.png" alt="Library health, in dark mode" width="425">
+</p>
 
 ## Quick start
 
