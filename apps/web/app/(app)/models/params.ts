@@ -40,6 +40,13 @@ function list(value: string | string[] | undefined): string[] {
   return values.filter((item) => item.length > 0 && item.length <= 64)
 }
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/** Libraries, creators and tags are filtered by id; anything else would fail the query. */
+function ids(value: string | string[] | undefined): string[] {
+  return list(value).filter((item) => UUID.test(item))
+}
+
 function cursor(value: string | string[] | undefined): string | undefined {
   const single = Array.isArray(value) ? value[0] : value
   return single && single.length <= 512 ? single : undefined
@@ -58,9 +65,9 @@ export function parseSearchParams(raw: RawParams): ParsedSearchParams {
 
   return {
     q: (Array.isArray(raw.q) ? (raw.q[0] ?? '') : (raw.q ?? '')).slice(0, 200),
-    library: list(raw.library),
-    creator: list(raw.creator),
-    tag: list(raw.tag),
+    library: ids(raw.library),
+    creator: ids(raw.creator),
+    tag: ids(raw.tag),
     license: list(raw.license),
     format: list(raw.format),
     presupported: flag(raw.presupported),

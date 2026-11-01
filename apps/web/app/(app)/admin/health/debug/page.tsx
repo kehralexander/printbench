@@ -238,8 +238,10 @@ export default async function DebugPage() {
 
       {report.recentErrors.length > 0 && (
         <p className="mt-4 text-sm text-[var(--color-ink-muted)]">
-          {report.recentErrors.length} recent warning{report.recentErrors.length === 1 ? '' : 's'}{' '}
-          and errors are in the log.{' '}
+          {report.recentErrors.length === 1
+            ? '1 recent warning or error is'
+            : `${report.recentErrors.length} recent warnings and errors are`}{' '}
+          in the log.{' '}
           <Link
             href={'/admin/health/logs?level=warn' as Route}
             className="font-medium text-[var(--color-accent)] hover:underline"

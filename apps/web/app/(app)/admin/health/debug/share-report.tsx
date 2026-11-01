@@ -52,20 +52,24 @@ export function ShareReport({
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        <label className="flex items-start gap-2.5 text-sm">
-          <Checkbox
-            checked={includeLogs}
-            onChange={(event) => setIncludeLogs(event.target.checked)}
-            className="mt-0.5"
-          />
-          <span>
-            Include the last {logLines} warning{logLines === 1 ? '' : 's'} and errors from the log
-            <span className="block text-xs text-[var(--color-ink-muted)]">
-              Usually the most useful part. Log lines are real text from your instance and can
-              mention file and library names, so read the preview before posting it publicly.
+        {/* Nothing to include when the log has no warnings or errors. */}
+        {logLines > 0 && (
+          <label className="flex items-start gap-2.5 text-sm">
+            <Checkbox
+              checked={includeLogs}
+              onChange={(event) => setIncludeLogs(event.target.checked)}
+              className="mt-0.5"
+            />
+            <span>
+              Include the last{' '}
+              {logLines === 1 ? 'warning or error' : `${logLines} warnings and errors`} from the log
+              <span className="block text-xs text-[var(--color-ink-muted)]">
+                Usually the most useful part. Log lines are real text from your instance and can
+                mention file and library names, so read the preview before posting it publicly.
+              </span>
             </span>
-          </span>
-        </label>
+          </label>
+        )}
 
         <div className="flex flex-wrap items-center gap-2">
           {/* Clipboard access needs HTTPS or localhost; without it, the
