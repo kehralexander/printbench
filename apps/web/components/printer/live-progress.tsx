@@ -16,7 +16,7 @@ import { projectReading, type Reading } from './project-reading'
  * measured on the server's clock, so a browser with the wrong time does not
  * skew it. `ticking` is false for a paused print, which stays where it is.
  */
-function useProjection(reading: Reading, ageSec: number, ticking: boolean): Reading {
+export function useProjection(reading: Reading, ageSec: number, ticking: boolean): Reading {
   // Every render of the page brings a new ageSec; counting restarts from it.
   const [counter, setCounter] = useState({ ageSec, ticks: 0 })
   if (counter.ageSec !== ageSec) setCounter({ ageSec, ticks: 0 })
