@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm'
 import type { Database } from '@pb/db'
+import { derivedWorkFileSql } from '../services/model-format'
 
 export interface ModelPreviewStatus {
   publicId: string
@@ -33,7 +34,7 @@ export async function modelPreviewStatuses(
            EXISTS (
              SELECT 1 FROM model_files pending
              WHERE pending.model_id = m.id AND pending.missing_at IS NULL
-               AND pending.previewable AND pending.thumb_state = 'pending'
+               AND ${derivedWorkFileSql('pending')} AND pending.thumb_state = 'pending'
            ) AS pending
     FROM models m
     LEFT JOIN model_files selected
@@ -41,7 +42,7 @@ export async function modelPreviewStatuses(
     LEFT JOIN LATERAL (
       SELECT f.id, f.thumb_key FROM model_files f
       WHERE f.model_id = m.id AND f.missing_at IS NULL AND f.thumb_state = 'ok'
-      ORDER BY (f.id = m.preview_file_id) DESC NULLS LAST, f.size DESC, f.id
+      ORDER BY (f.id = m.preview_file_id) DESC NULLS LAST, (f.category = 'slicer'), f.size DESC, f.id
       LIMIT 1
     ) thumb ON true
     WHERE m.missing_at IS NULL AND m.public_id IN (${sql.join(

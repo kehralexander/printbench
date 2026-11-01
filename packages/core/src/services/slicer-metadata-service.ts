@@ -1,5 +1,10 @@
 import type { StorageAdapter } from '../storage/types'
 import { parseGcodeMetadata, type GcodeMetadata } from '../slicer/gcode-metadata'
+import {
+  SLICER_THUMBNAIL_WINDOW_BYTES,
+  extractSlicerThumbnails,
+  type SlicerThumbnail,
+} from '../slicer/gcode-thumbnails'
 
 /**
  * Fetching the readable ends of a sliced file.
@@ -24,6 +29,33 @@ const GCODE_EXTENSIONS = new Set(['gcode', 'gco', 'g', 'ngc'])
 
 export function isParsableSlicerFile(extension: string): boolean {
   return GCODE_EXTENSIONS.has(extension.toLowerCase().replace(/^\./, ''))
+}
+
+/**
+ * Sliced files that may carry an embedded preview image: plain G-code and
+ * binary G-code. Resin formats store previews in layouts of their own.
+ */
+export const THUMBNAIL_SLICER_EXTENSIONS: readonly string[] = [...GCODE_EXTENSIONS, 'bgcode']
+
+export function hasSlicerThumbnail(extension: string): boolean {
+  return THUMBNAIL_SLICER_EXTENSIONS.includes(extension.toLowerCase().replace(/^\./, ''))
+}
+
+/**
+ * The preview images a slicer embedded at the head of a sliced file.
+ *
+ * One ranged read of the head, however large the file. Unlike the settings
+ * reader this throws on storage errors: it runs in a job that records them.
+ */
+export async function readSlicerThumbnails(
+  storage: StorageAdapter,
+  relativePath: string,
+  size: number | null,
+): Promise<SlicerThumbnail[]> {
+  const total = size ?? (await sizeOf(storage, relativePath))
+  if (total == null || total === 0) return []
+  const end = Math.min(total, SLICER_THUMBNAIL_WINDOW_BYTES) - 1
+  return extractSlicerThumbnails(await readBytes(storage, relativePath, 0, end))
 }
 
 /**
@@ -80,23 +112,33 @@ async function sizeOf(storage: StorageAdapter, relativePath: string): Promise<nu
 }
 
 /** `end` is inclusive, matching ByteRange and HTTP. */
-async function readRange(
+async function readBytes(
   storage: StorageAdapter,
   relativePath: string,
   start: number,
   end: number,
-): Promise<string> {
+): Promise<Buffer> {
   const stream = await storage.createReadStream(relativePath, { start, end })
 
   const chunks: Buffer[] = []
   for await (const chunk of stream) {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as string))
   }
+  return Buffer.concat(chunks)
+}
+
+async function readRange(
+  storage: StorageAdapter,
+  relativePath: string,
+  start: number,
+  end: number,
+): Promise<string> {
+  const bytes = await readBytes(storage, relativePath, start, end)
 
   /*
    * G-code comments are ASCII. A multi-byte character clipped at the window
    * boundary decodes to a replacement character on one line, which the parser
    * discards along with the rest of that line.
    */
-  return Buffer.concat(chunks).toString('utf8')
+  return bytes.toString('utf8')
 }

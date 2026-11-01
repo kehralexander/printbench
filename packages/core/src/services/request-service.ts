@@ -497,7 +497,7 @@ const SELECT_REQUEST = sql`
          (m.missing_at IS NOT NULL) AS model_missing,
          (SELECT f.id FROM model_files f
            WHERE f.model_id = m.id AND f.thumb_state = 'ok' AND f.missing_at IS NULL
-           ORDER BY f.size DESC LIMIT 1) AS thumb_file_id,
+           ORDER BY (f.category = 'slicer'), f.size DESC LIMIT 1) AS thumb_file_id,
          r.model_file_id, mf.filename,
          r.quantity, r.priority, r.status, r.material, r.color_hex,
          r.due_at, r.closed_at, r.print_run_id,

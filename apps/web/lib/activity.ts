@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm'
 import type { Database } from '@pb/db'
 import { activityJobs, JOB } from '@pb/jobs'
+import { derivedWorkFileSql } from '@pb/core'
 import type { Db as IDatabase } from 'pg-boss'
 
 export interface Activity {
@@ -31,7 +32,7 @@ export async function readActivity(
           bool_or(f.thumb_state = 'failed') AS failed
         FROM models m
         JOIN model_files f ON f.model_id = m.id
-        WHERE m.missing_at IS NULL AND f.missing_at IS NULL AND f.previewable
+        WHERE m.missing_at IS NULL AND f.missing_at IS NULL AND ${derivedWorkFileSql('f')}
           AND f.thumb_state IN ('pending', 'failed')
         GROUP BY m.id
       ) processing

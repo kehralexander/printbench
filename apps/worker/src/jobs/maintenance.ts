@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm'
 import { getDb } from '@pb/db'
 import {
   SYSTEM_ACTOR,
+  derivedWorkFileSql,
   getSettings,
   prune,
   pruneAuditEvents,
@@ -39,7 +40,7 @@ export async function handleMaintReconcile(): Promise<void> {
            (f.analysis_state = 'pending') AS needs_analysis,
            (f.thumb_state = 'pending')    AS needs_thumb
     FROM model_files f
-    WHERE f.missing_at IS NULL AND f.previewable
+    WHERE f.missing_at IS NULL AND ${derivedWorkFileSql('f')}
       AND (f.analysis_state = 'pending' OR f.thumb_state = 'pending')
       AND f.created_at < now() - '15 minutes'::interval
     ORDER BY f.created_at

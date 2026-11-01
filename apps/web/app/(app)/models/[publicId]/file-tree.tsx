@@ -20,6 +20,8 @@ export type TreeFile = {
   triangle_count: number | null
   canOpenInSlicer: boolean
   canSendToPrinter: boolean
+  /** A per-file preview, shown for sliced files so plates can be told apart. */
+  thumbUrl?: string | null
 }
 
 type TreeNode = {
@@ -90,6 +92,16 @@ function FileRow({ file, depth }: { file: TreeFile; depth: number }) {
       <span className="w-10 shrink-0 rounded bg-[var(--color-surface-2)] px-1.5 py-0.5 text-center text-[10px] font-medium uppercase text-[var(--color-ink-faint)]">
         {file.extension || 'Unknown'}
       </span>
+
+      {file.thumbUrl && (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={file.thumbUrl}
+          alt=""
+          loading="lazy"
+          className="size-10 shrink-0 rounded bg-[var(--color-surface-2)] object-contain"
+        />
+      )}
 
       <span className="min-w-0 flex-1 basis-40 truncate text-sm" title={file.filename}>
         {file.displayName ?? file.filename}

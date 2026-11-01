@@ -75,7 +75,7 @@ export async function listCreators(db: Database): Promise<CreatorSummary[]> {
            (SELECT f.id FROM model_files f
               JOIN models fm ON fm.id = f.model_id
              WHERE fm.creator_id = c.id AND f.thumb_state = 'ok' AND f.missing_at IS NULL
-             ORDER BY f.size DESC LIMIT 1) AS preview_file_id
+             ORDER BY (f.category = 'slicer'), f.size DESC LIMIT 1) AS preview_file_id
     FROM creators c
     LEFT JOIN models m ON m.creator_id = c.id AND m.missing_at IS NULL
     GROUP BY c.id
@@ -300,7 +300,7 @@ export async function listCollections(db: Database): Promise<CollectionSummary[]
            (SELECT f.id FROM collection_models x
               JOIN model_files f ON f.model_id = x.model_id
              WHERE x.collection_id = c.id AND f.thumb_state = 'ok' AND f.missing_at IS NULL
-             ORDER BY f.size DESC LIMIT 1) AS preview_file_id
+             ORDER BY (f.category = 'slicer'), f.size DESC LIMIT 1) AS preview_file_id
     FROM collections c
     LEFT JOIN collection_models cm ON cm.collection_id = c.id
     LEFT JOIN models m ON m.id = cm.model_id AND m.missing_at IS NULL

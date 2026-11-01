@@ -113,7 +113,7 @@ export interface GroupingOptions {
   depth?: number
 }
 
-function isCommonSubfolder(path: string): boolean {
+export function isCommonSubfolder(path: string): boolean {
   return COMMON_SUBFOLDERS.has(basename(path).toLowerCase())
 }
 

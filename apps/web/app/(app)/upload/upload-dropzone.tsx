@@ -44,9 +44,15 @@ function formatSize(bytes: number): string {
 
 export function UploadDropzone({
   libraryId,
+  modelId,
   onBusyChange,
 }: {
   libraryId: string
+  /**
+   * Adds the files to this existing model instead of the library root. The
+   * worker resolves the model's folder itself; only the id travels.
+   */
+  modelId?: string
   onBusyChange: (busy: boolean) => void
 }) {
   const router = useRouter()
@@ -107,6 +113,7 @@ export function UploadDropzone({
             libraryId,
             relativePath: item.relativePath,
             filename: item.file.name,
+            ...(modelId ? { modelId } : {}),
           },
           // Lets tus resume this exact file after a reload instead of restarting.
           storeFingerprintForResuming: true,
@@ -117,6 +124,7 @@ export function UploadDropzone({
               window.location.protocol,
               window.location.host,
               libraryId,
+              modelId ?? '',
               file.name,
               file.type,
               file.size,
@@ -134,6 +142,11 @@ export function UploadDropzone({
             // The worker queues a scan on completion, so the model appears on its
             // own; refresh so the library counts catch up.
             router.refresh()
+            // An added file shows up once that scan has run, a moment later.
+            if (modelId) {
+              setTimeout(() => router.refresh(), 2000)
+              setTimeout(() => router.refresh(), 6000)
+            }
           },
         })
 
@@ -196,19 +209,25 @@ export function UploadDropzone({
         )}
       >
         <Upload className="mx-auto mb-3 size-7 text-[var(--color-ink-faint)]" />
-        <p className="text-sm font-medium">Drop files or folders here</p>
+        <p className="text-sm font-medium">
+          {modelId ? 'Drop files to add to this model' : 'Drop files or folders here'}
+        </p>
         <p className="mt-1 text-sm text-[var(--color-ink-muted)]">
-          Folder structure is kept and ZIP files are unpacked automatically.
+          {modelId
+            ? 'Same-named files are kept side by side, never replaced. ZIP files are unpacked into the model.'
+            : 'Folder structure is kept and ZIP files are unpacked automatically.'}
         </p>
 
         <div className="mt-4 flex flex-wrap justify-center gap-2">
           <Button variant="secondary" size="sm" onClick={() => inputRef.current?.click()}>
             Choose files
           </Button>
-          <Button variant="secondary" size="sm" onClick={() => folderRef.current?.click()}>
-            <FolderUp />
-            Choose a folder
-          </Button>
+          {!modelId && (
+            <Button variant="secondary" size="sm" onClick={() => folderRef.current?.click()}>
+              <FolderUp />
+              Choose a folder
+            </Button>
+          )}
         </div>
 
         <input

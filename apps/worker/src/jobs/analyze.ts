@@ -9,6 +9,8 @@ import {
   applyEmbeddedModelMetadata,
   isEmbeddedMetadataSource,
   fetchMakerWorldProjectMetadata,
+  hasSlicerThumbnail,
+  readSlicerThumbnails,
   type StorageAdapter,
   type EmbeddedModelMetadata,
 } from '@pb/core'
@@ -28,6 +30,8 @@ import { JOB } from '@pb/jobs'
 
 const THUMBNAIL_SIZE = 512
 const EMBEDDED_ARTWORK_SIZE = 2048
+/** Bump to re-extract every slicer preview; kept apart from the mesh renderer's version. */
+const SLICER_THUMBNAIL_VERSION = 1
 
 /**
  * Per-file jobs: geometry analysis, thumbnail rendering, and content hashing.
@@ -181,6 +185,11 @@ export async function handleFileThumbnail(
   const { file, storage, relativePath } = context
   const format = supportedFormat(file.extension)
 
+  if (!format && hasSlicerThumbnail(file.extension)) {
+    await slicerThumbnail(context)
+    return
+  }
+
   if (!format) {
     await db
       .update(schema.modelFiles)
@@ -241,6 +250,66 @@ export async function handleFileThumbnail(
 
     await store.write(key, result.data)
 
+    await db
+      .update(schema.modelFiles)
+      .set({ thumbKey: key, thumbState: 'ok', thumbError: null })
+      .where(eq(schema.modelFiles.id, file.id))
+  } catch (error) {
+    await recordFailure(file.id, 'thumbState', 'thumbError', error)
+  }
+}
+
+/**
+ * A sliced file's own preview: the image the slicer embedded at its head.
+ *
+ * Nothing is rendered from the toolpaths. A file without an embedded image is
+ * `skipped`, not `failed` — most slicers only write one when the printer
+ * profile asks for it, so its absence is normal rather than an error.
+ */
+async function slicerThumbnail(context: FileContext): Promise<void> {
+  const db = getDb()
+  const { file, storage, relativePath } = context
+
+  const key = previewKey({
+    fileId: file.id,
+    digest: file.digest,
+    size: file.size,
+    mtimeMs: file.mtimeMs,
+    size_px: THUMBNAIL_SIZE,
+    // Offset well clear of the mesh renderer's versions so the keys never meet.
+    rendererVersion: 900_000 + SLICER_THUMBNAIL_VERSION,
+    format: 'webp',
+  })
+
+  const store = getPreviewStore()
+  if (await store.has(key)) {
+    await db
+      .update(schema.modelFiles)
+      .set({ thumbKey: key, thumbState: 'ok', thumbError: null })
+      .where(eq(schema.modelFiles.id, file.id))
+    return
+  }
+
+  try {
+    const embedded = await readSlicerThumbnails(storage, relativePath, file.size ?? null)
+    const result = await renderEmbeddedThumbnail(
+      embedded.map((image, index) => ({
+        data: image.data,
+        contentType: image.contentType,
+        path: `${file.filename}#thumbnail-${index}`,
+      })),
+      { size: THUMBNAIL_SIZE },
+    )
+
+    if (!result) {
+      await db
+        .update(schema.modelFiles)
+        .set({ thumbState: 'skipped', thumbError: null })
+        .where(eq(schema.modelFiles.id, file.id))
+      return
+    }
+
+    await store.write(key, result.data)
     await db
       .update(schema.modelFiles)
       .set({ thumbKey: key, thumbState: 'ok', thumbError: null })

@@ -7,6 +7,7 @@ import {
   normalizePath,
   type StorageAdapter,
 } from '@pb/core'
+import { freePath, pathWithinModel } from './model-target'
 
 /**
  * Extracting an uploaded zip into a library.
@@ -55,11 +56,16 @@ export interface ZipIngestResult {
  * Refuses if the destination already holds anything, rather than merging into
  * it — silently overwriting files nobody asked to overwrite is worse than
  * making someone rename and re-upload.
+ *
+ * `intoModel` is the exception: the destination is an existing model's folder
+ * and merging is the point. Entries are placed the way a single added file
+ * is (see model-target.ts) and take a free name rather than replacing anything.
  */
 export async function extractZipIntoLibrary(
   zipPath: string,
   storage: StorageAdapter,
   destRelativePath: string,
+  options: { intoModel?: boolean } = {},
 ): Promise<ZipIngestResult> {
   const size = (await stat(zipPath)).size
   if (size > MAX_ZIP_INPUT_BYTES) {
@@ -72,7 +78,7 @@ export async function extractZipIntoLibrary(
   if (!destination || !isSafeRelativePath(destination)) {
     throw new ZipIngestError('Refusing to extract outside the library.')
   }
-  if (await destinationInUse(storage, destination)) {
+  if (!options.intoModel && (await destinationInUse(storage, destination))) {
     throw new ZipIngestError('A folder with that name already exists in the library.')
   }
 
@@ -119,13 +125,17 @@ export async function extractZipIntoLibrary(
         continue
       }
 
-      const target = joinPath(destination, normalizePath(relative))
+      let target = joinPath(
+        destination,
+        options.intoModel ? pathWithinModel(relative) : normalizePath(relative),
+      )
       // Belt and braces: the joined path must still sit under the destination.
       // The adapter checks containment against the library root again on write.
       if (target !== destination && !target.startsWith(`${destination}/`)) {
         console.warn(`[zip] skipping entry escaping the destination: ${name}`)
         continue
       }
+      if (options.intoModel) target = await freePath(storage, target)
 
       bytesExtracted += data.byteLength
       if (bytesExtracted > MAX_ZIP_UNCOMPRESSED_BYTES) {

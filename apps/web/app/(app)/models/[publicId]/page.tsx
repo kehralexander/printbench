@@ -36,6 +36,7 @@ import { MoveButton } from './move-button'
 import { LikeButton } from './like-button'
 import { CollectionPicker } from './collection-picker'
 import { QueueButton } from './queue-button'
+import { AddFilesButton } from './add-files-button'
 
 export const dynamic = 'force-dynamic'
 
@@ -242,9 +243,14 @@ export default async function ModelPage({ params }: { params: Promise<{ publicId
 
   // The largest rendered mesh represents the model, and its dimensions are the
   // ones worth showing — a support-only variant is not what people measure.
+  // A slicer's embedded preview only stands in when nothing else rendered.
   const hero = files.rows
     .filter((f) => f.thumb_state === 'ok' && !f.missing_at)
-    .sort((a, b) => Number(b.size) - Number(a.size))[0]
+    .sort(
+      (a, b) =>
+        Number(a.category === 'slicer') - Number(b.category === 'slicer') ||
+        Number(b.size) - Number(a.size),
+    )[0]
 
   const selectedPreview = model.preview_file_id
     ? files.rows.find((file) => file.id === model.preview_file_id && !file.missing_at)
@@ -363,6 +369,15 @@ export default async function ModelPage({ params }: { params: Promise<{ publicId
                   publicId={model.public_id}
                   shared={model.share_token != null}
                   shareUrl={model.share_token ? `${appOrigin}/share/${model.share_token}` : null}
+                />
+              )}
+              {model.library_writable && can(policyUser, 'file:upload') && (
+                <AddFilesButton
+                  publicId={model.public_id}
+                  modelId={model.id}
+                  libraryId={model.library_id}
+                  isFileModel={model.is_file_model}
+                  fileName={model.path.split('/').pop() ?? model.name}
                 />
               )}
               {canEdit && !model.is_package && (
@@ -526,6 +541,10 @@ export default async function ModelPage({ params }: { params: Promise<{ publicId
                     triangle_count: file.triangle_count,
                     canOpenInSlicer: slicersFor(file.extension).length > 0,
                     canSendToPrinter: canSend && canSendToPrinter(file.extension),
+                    thumbUrl:
+                      file.category === 'slicer' && file.thumb_state === 'ok' && file.thumb_key
+                        ? `/api/files/${file.id}/thumb?v=${encodeURIComponent(file.thumb_key)}`
+                        : null,
                   }))}
                 />
               </Card>

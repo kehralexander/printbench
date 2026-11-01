@@ -27,6 +27,7 @@ import { walkLibrary, type DirFingerprint } from '../library/walker'
 import { lookup } from '../library/media-types'
 import { basename, slugify } from '../library/paths'
 import { refreshModelSearchVectors } from '../search/refresh'
+import { derivedWorkFileSql } from '../services/model-format'
 import { readPackageSidecar, readSidecar } from '../sidecar/sidecar'
 import type { LibraryLocation, StorageAdapter } from '../storage/types'
 import {
@@ -301,7 +302,7 @@ export async function scanLibraryUnderLock(
         JOIN models m ON m.id = f.model_id
         WHERE m.library_id = ${library.id}
           AND f.missing_at IS NULL
-          AND f.previewable = true
+          AND ${derivedWorkFileSql('f')}
           AND (f.analysis_state = 'pending' OR f.thumb_state = 'pending' OR f.digest IS NULL)
         LIMIT 50000
       `)

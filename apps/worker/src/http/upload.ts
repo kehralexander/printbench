@@ -3,7 +3,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto'
 import { createReadStream } from 'node:fs'
 import { mkdir, rename, rm, stat } from 'node:fs/promises'
 import path from 'node:path'
-import { eq } from 'drizzle-orm'
+import { and, eq } from 'drizzle-orm'
 import { Server } from '@tus/server'
 import { FileStore } from '@tus/file-store'
 import { getDb, schema } from '@pb/db'
@@ -21,6 +21,7 @@ import {
 } from '@pb/core'
 import { JOB, getQueue } from '@pb/jobs'
 import { extractZipIntoLibrary, ZipIngestError } from './zip-ingest'
+import { freePath, pathWithinModel } from './model-target'
 
 /**
  * Resumable uploads, via the tus protocol.
@@ -226,6 +227,36 @@ async function ingest(
   const staged = path.join(stagingDir, uploadId)
 
   /*
+   * Added to an existing model rather than dropped into the library. The model
+   * is looked up here, inside the library the upload was written to, so the
+   * browser only names which model — never the folder bytes land in.
+   */
+  const modelId = metadata.modelId ?? ''
+  let model: { path: string } | undefined
+  if (modelId) {
+    const found = /^[0-9a-f-]{36}$/i.test(modelId)
+      ? await db
+          .select({
+            path: schema.models.path,
+            isFileModel: schema.models.isFileModel,
+            missingAt: schema.models.missingAt,
+          })
+          .from(schema.models)
+          .where(and(eq(schema.models.id, modelId), eq(schema.models.libraryId, library.id)))
+          .limit(1)
+      : []
+    const row = found[0]
+    // A single-file model has no folder yet; the page converts it before uploading.
+    if (!row || row.missingAt || row.isFileModel) {
+      console.warn(`[upload] rejecting ${uploadId}: model ${modelId} cannot receive files`)
+      await rm(staged, { force: true })
+      await rm(`${staged}.json`, { force: true })
+      return
+    }
+    model = row
+  }
+
+  /*
    * A zip is unpacked, never stored whole — nobody can browse into an opaque
    * archive sitting in their library, and this is the only way to bulk-upload
    * a Thingiverse-style download or an existing collection without unzipping
@@ -233,9 +264,13 @@ async function ingest(
    * site only decides WHERE the result goes.
    */
   if (extensionOf(relativePath) === 'zip') {
-    const destRelativePath = joinPath(dirname(relativePath), stemOf(relativePath))
+    const destRelativePath = model
+      ? model.path
+      : joinPath(dirname(relativePath), stemOf(relativePath))
     try {
-      const result = await extractZipIntoLibrary(staged, storage, destRelativePath)
+      const result = await extractZipIntoLibrary(staged, storage, destRelativePath, {
+        intoModel: Boolean(model),
+      })
       console.log(
         `[upload] extracted ${result.filesExtracted} file(s) from ${relativePath} into "${library.name}"`,
       )
@@ -258,20 +293,23 @@ async function ingest(
 
   const size = (await stat(staged).catch(() => null))?.size ?? 0
 
+  let target = relativePath
   try {
+    if (model) target = await freePath(storage, joinPath(model.path, pathWithinModel(relativePath)))
+
     if (library.backend === 'local' && library.path) {
-      await moveIntoLocalLibrary(staged, library.path, relativePath)
+      await moveIntoLocalLibrary(staged, library.path, target)
     } else {
       /*
        * Streamed through the adapter, which does a multipart upload for S3 —
        * so a multi-gigabyte mesh never has to be held in memory, and a failure
        * aborts the upload rather than leaving orphaned parts in the bucket.
        */
-      await storage.write(relativePath, createReadStream(staged))
+      await storage.write(target, createReadStream(staged))
       await rm(staged, { force: true })
     }
   } catch (error) {
-    console.error(`[upload] could not store ${relativePath}: ${String(error)}`)
+    console.error(`[upload] could not store ${target}: ${String(error)}`)
     await rm(staged, { force: true })
     await rm(`${staged}.json`, { force: true })
     return
@@ -280,7 +318,7 @@ async function ingest(
   // tus keeps a .json alongside the payload.
   await rm(`${staged}.json`, { force: true })
 
-  console.log(`[upload] stored ${relativePath} (${size} bytes) in "${library.name}"`)
+  console.log(`[upload] stored ${target} (${size} bytes) in "${library.name}"`)
 
   /*
    * A scan rather than a direct insert. The scan already knows how to group
