@@ -43,3 +43,17 @@ tracking release (`v0.7.4-oidc.6`). Not started yet.
       idle or busy, and when busy the file, percentage and "done around" time,
       linking to the full status page. Read from the worker's snapshots
       (`printerSnapshots`), so the dashboard never waits on a printer.
+
+## Sign-in
+
+- [ ] **OIDC user auto-provisioning.** Today an unknown SSO user is refused
+      unless `OIDC_ALLOW_SIGNUP=true` (not set in the k8s deployment), and then
+      always lands as `viewer`. Provision accounts on first SSO sign-in
+      properly instead:
+  - map the IdP's groups claim to roles (e.g. `OIDC_ADMIN_GROUPS`,
+    `OIDC_MEMBER_GROUPS`, else `viewer`), and optionally refuse anyone in none
+    of the allowed groups (`OIDC_ALLOWED_GROUPS`);
+  - re-apply the mapping on every SSO sign-in so role changes in the IdP take
+    effect, without overriding roles set by hand for local accounts;
+  - take name and verified e-mail from the ID token and audit the account
+    creation (`auth.user_provisioned`).
