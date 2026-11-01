@@ -1,13 +1,19 @@
 'use client'
 
-import { useState, useTransition } from 'react'
+import { useMemo, useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import type { Route } from 'next'
-import { Check, FolderTree, Loader2, Pencil, Plus, Trash2, X } from 'lucide-react'
+import { Check, FolderTree, Loader2, Pencil, Plus, Trash2 } from 'lucide-react'
+import { PageHeader } from '@/components/shell/page-header'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card } from '@/components/ui/card'
+import { EditableNameRow } from '@/components/ui/editable-name-row'
+import { EmptyState } from '@/components/ui/empty-state'
+import { ListToolbar } from '@/components/ui/list-toolbar'
+import { SortControl } from '@/components/ui/sort-control'
+import { compareDesc, compareText, type SortOption } from '@/lib/sort'
 import { create, remove, rename } from './actions'
 
 /**
@@ -26,12 +32,33 @@ export interface CollectionView {
   parentId: string | null
   modelCount: number
   previewFileId: string | null
+  createdAt: Date
+}
+
+type CollectionSort = 'name' | 'models' | 'recent'
+
+const SORT_OPTIONS: SortOption<CollectionSort>[] = [
+  { value: 'name', label: 'Name' },
+  { value: 'models', label: 'Most models' },
+  { value: 'recent', label: 'Newest' },
+]
+
+// Applied within each level of the tree: a child never sorts out from under its parent.
+const COMPARE: Record<CollectionSort, (a: CollectionView, b: CollectionView) => number> = {
+  name: (a, b) => compareText(a.name, b.name),
+  models: (a, b) => b.modelCount - a.modelCount || compareText(a.name, b.name),
+  recent: (a, b) => compareDesc(a.createdAt, b.createdAt) || compareText(a.name, b.name),
 }
 
 export function CollectionList({
+  title,
+  description,
   collections,
   canEdit,
 }: {
+  /** The page header is rendered here so "New collection" can sit in its actions. */
+  title: string
+  description: string
   collections: CollectionView[]
   canEdit: boolean
 }) {
@@ -40,17 +67,21 @@ export function CollectionList({
   const [draftName, setDraftName] = useState('')
   const [parentId, setParentId] = useState<string | null>(null)
   const [editing, setEditing] = useState<string | null>(null)
-  const [editDraft, setEditDraft] = useState('')
+  const [sort, setSort] = useState<CollectionSort>('name')
   const [error, setError] = useState<string | null>(null)
   const [pending, startTransition] = useTransition()
 
   // Children keyed by parent, so the tree can be walked without re-scanning.
-  const byParent = new Map<string | null, CollectionView[]>()
-  for (const collection of collections) {
-    const siblings = byParent.get(collection.parentId) ?? []
-    siblings.push(collection)
-    byParent.set(collection.parentId, siblings)
-  }
+  const byParent = useMemo(() => {
+    const map = new Map<string | null, CollectionView[]>()
+    for (const collection of collections) {
+      const siblings = map.get(collection.parentId) ?? []
+      siblings.push(collection)
+      map.set(collection.parentId, siblings)
+    }
+    for (const siblings of map.values()) siblings.sort(COMPARE[sort])
+    return map
+  }, [collections, sort])
 
   function run(work: () => Promise<{ ok: boolean; error?: string }>) {
     setError(null)
@@ -94,28 +125,13 @@ export function CollectionList({
             )}
 
             {editing === collection.id ? (
-              <>
-                <Input
-                  autoFocus
-                  value={editDraft}
-                  onChange={(e) => setEditDraft(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') run(() => rename(collection.id, editDraft))
-                    if (e.key === 'Escape') setEditing(null)
-                  }}
-                  className="h-8 max-w-64"
-                />
-                <Button
-                  size="sm"
-                  disabled={pending}
-                  onClick={() => run(() => rename(collection.id, editDraft))}
-                >
-                  <Check />
-                </Button>
-                <Button size="sm" variant="ghost" onClick={() => setEditing(null)}>
-                  <X />
-                </Button>
-              </>
+              <EditableNameRow
+                initial={collection.name}
+                label={`Name of ${collection.name}`}
+                pending={pending}
+                onSave={(name) => run(() => rename(collection.id, name))}
+                onCancel={() => setEditing(null)}
+              />
             ) : (
               <>
                 <div className="min-w-0 flex-1">
@@ -158,7 +174,6 @@ export function CollectionList({
                       aria-label={`Rename ${collection.name}`}
                       onClick={() => {
                         setEditing(collection.id)
-                        setEditDraft(collection.name)
                       }}
                     >
                       <Pencil />
@@ -167,6 +182,7 @@ export function CollectionList({
                       variant="ghost"
                       size="icon"
                       aria-label={`Remove ${collection.name}`}
+                      className="hover:text-[var(--color-danger)]"
                       onClick={() => {
                         if (
                           confirm(
@@ -196,60 +212,90 @@ export function CollectionList({
   }
 
   return (
-    <div className="space-y-3">
-      {canEdit && !adding && (
-        <Button
-          size="sm"
-          onClick={() => {
-            setAdding(true)
-            setParentId(null)
-            setDraftName('')
-          }}
-        >
-          <Plus />
-          New collection
-        </Button>
-      )}
-
-      {adding && (
-        <Card>
-          <div className="flex flex-wrap items-center gap-2 p-3">
-            <Input
-              autoFocus
-              value={draftName}
-              onChange={(e) => setDraftName(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') run(() => create({ name: draftName, parentId }))
-                if (e.key === 'Escape') setAdding(false)
-              }}
-              placeholder={parentId ? 'Name of the nested collection' : 'Name of the collection'}
-              className="h-9 max-w-72"
-            />
+    <>
+      <PageHeader
+        title={title}
+        description={description}
+        actions={
+          canEdit &&
+          !adding && (
             <Button
-              size="sm"
-              disabled={pending}
-              onClick={() => run(() => create({ name: draftName, parentId }))}
+              onClick={() => {
+                setAdding(true)
+                setParentId(null)
+                setDraftName('')
+              }}
             >
-              {pending ? <Loader2 className="animate-spin" /> : <Check />}
-              Create
+              <Plus />
+              New collection
             </Button>
-            <Button size="sm" variant="ghost" onClick={() => setAdding(false)}>
-              Cancel
-            </Button>
-            {parentId && (
-              <span className="text-xs text-[var(--color-ink-faint)]">
-                inside {collections.find((c) => c.id === parentId)?.name}
-              </span>
-            )}
-          </div>
-        </Card>
-      )}
+          )
+        }
+      />
+      <div className="space-y-4">
+        {adding && (
+          <Card>
+            <div className="flex flex-wrap items-center gap-2 p-3">
+              <Input
+                autoFocus
+                value={draftName}
+                onChange={(e) => setDraftName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') run(() => create({ name: draftName, parentId }))
+                  if (e.key === 'Escape') setAdding(false)
+                }}
+                placeholder={parentId ? 'Name of the nested collection' : 'Name of the collection'}
+                className="h-9 max-w-72"
+              />
+              <Button
+                size="sm"
+                disabled={pending}
+                onClick={() => run(() => create({ name: draftName, parentId }))}
+              >
+                {pending ? <Loader2 className="animate-spin" /> : <Check />}
+                Create
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setAdding(false)}>
+                Cancel
+              </Button>
+              {parentId && (
+                <span className="text-xs text-[var(--color-ink-faint)]">
+                  inside {collections.find((c) => c.id === parentId)?.name}
+                </span>
+              )}
+            </div>
+          </Card>
+        )}
 
-      {error && <p className="text-sm text-[var(--color-danger)]">{error}</p>}
+        {/* Directly above the list it orders, below the "new" form. */}
+        <ListToolbar
+          className="mb-0"
+          sort={
+            <SortControl
+              options={SORT_OPTIONS}
+              value={sort}
+              onChange={setSort}
+              count={collections.length}
+            />
+          }
+        />
 
-      <Card className="overflow-hidden">
-        <ul className="divide-y divide-[var(--color-border)]">{renderTree(null, 0)}</ul>
-      </Card>
-    </div>
+        {error && <p className="text-sm text-[var(--color-danger)]">{error}</p>}
+
+        {collections.length === 0 ? (
+          !adding && (
+            <EmptyState
+              icon={<FolderTree />}
+              title="No collections yet"
+              description="Create one, then add models to it from their pages."
+            />
+          )
+        ) : (
+          <Card className="overflow-hidden">
+            <ul className="divide-y divide-[var(--color-border)]">{renderTree(null, 0)}</ul>
+          </Card>
+        )}
+      </div>
+    </>
   )
 }

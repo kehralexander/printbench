@@ -1,16 +1,17 @@
 'use client'
 
 import { useState } from 'react'
-import Link from 'next/link'
-import type { Route } from 'next'
+import { ChevronDown, ChevronRight } from 'lucide-react'
 import type { SearchHit } from '@pb/core'
 import { ModelGrid } from '@/components/model/model-grid'
 import { Button } from '@/components/ui/button'
+import type { ItemSort } from '@/components/model/item-sort'
 
 interface CreatorItemSectionProps {
   creatorId: string
   type: 'model' | 'package'
   title: string
+  sort: ItemSort
   initialItems: SearchHit[]
   total: number
   batchSize: number
@@ -21,6 +22,7 @@ export function CreatorItemSection({
   creatorId,
   type,
   title,
+  sort,
   initialItems,
   total,
   batchSize,
@@ -42,6 +44,7 @@ export function CreatorItemSection({
     try {
       const params = new URLSearchParams({
         type,
+        sort,
         offset: String(items.length),
         limit: String(batchSize),
       })
@@ -73,19 +76,22 @@ export function CreatorItemSection({
 
   return (
     <section className={className}>
-      <button
-        type="button"
-        onClick={() => setExpanded((value) => !value)}
-        aria-expanded={expanded}
-        className="mb-3 flex w-full items-center gap-2 text-left text-lg font-semibold"
-      >
-        <span aria-hidden className="w-4 text-sm text-[var(--color-ink-muted)]">
-          {expanded ? '▼' : '▶'}
-        </span>
-        <span>
-          {title} ({total.toLocaleString()})
-        </span>
-      </button>
+      <h2 className="mb-3">
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={() => setExpanded((value) => !value)}
+          aria-expanded={expanded}
+          className="-ml-3 font-semibold text-[var(--color-ink)]"
+        >
+          {expanded ? <ChevronDown aria-hidden /> : <ChevronRight aria-hidden />}
+          {title}
+          <span className="font-normal text-[var(--color-ink-muted)]">
+            {total.toLocaleString()}
+          </span>
+        </Button>
+      </h2>
 
       {expanded && (
         <>
@@ -106,13 +112,6 @@ export function CreatorItemSection({
               >
                 {loading ? 'Loading…' : 'Show more'}
               </Button>
-
-              <Link
-                href={`/models?creator=${encodeURIComponent(creatorId)}&type=${type}` as Route}
-                className="text-sm text-[var(--color-accent)] hover:underline"
-              >
-                See all in search
-              </Link>
             </div>
           )}
 

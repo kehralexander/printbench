@@ -8,7 +8,8 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { Field } from '@/components/ui/field'
-import { Card, CardContent } from '@/components/ui/card'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Checkbox } from '@/components/ui/checkbox'
 import { saveSettings } from './actions'
 
 /**
@@ -18,7 +19,14 @@ import { saveSettings } from './actions'
  * with forty of them is one nobody configures correctly, so anything that
  * belongs to a single library lives on that library instead.
  */
-export function SettingsForm({ initial }: { initial: Settings }) {
+export function SettingsForm({
+  initial,
+  ssoProvider,
+}: {
+  initial: Settings
+  /** The configured SSO provider's name, or null when SSO is off. */
+  ssoProvider: string | null
+}) {
   const router = useRouter()
   const [values, setValues] = useState<Settings>(initial)
   const [pending, startTransition] = useTransition()
@@ -45,11 +53,12 @@ export function SettingsForm({ initial }: { initial: Settings }) {
   }
 
   return (
-    <form onSubmit={submit} className="max-w-2xl space-y-4">
+    <form onSubmit={submit} className="max-w-2xl space-y-6">
       <Card>
-        <CardContent className="space-y-4 p-4">
-          <h2 className="text-sm font-semibold">This instance</h2>
-
+        <CardHeader>
+          <CardTitle>This instance</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
           <Field label="Name" htmlFor="site-name" hint="Shown in the sidebar and the browser tab.">
             <Input value={values.siteName} onChange={(e) => set('siteName', e.target.value)} />
           </Field>
@@ -70,10 +79,31 @@ export function SettingsForm({ initial }: { initial: Settings }) {
         </CardContent>
       </Card>
 
-      <Card>
-        <CardContent className="space-y-4 p-4">
-          <h2 className="text-sm font-semibold">Safety</h2>
+      {/*
+        Only offered with SSO configured: hiding the password form with no
+        other way in would leave nobody able to sign in.
+      */}
+      {ssoProvider && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Sign-in</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <Toggle
+              label="Hide password sign-in"
+              hint={`Show only the ${ssoProvider} button on the sign-in page. Admins can still reach the password form at /login?password=1.`}
+              checked={values.hidePasswordLogin}
+              onChange={(value) => set('hidePasswordLogin', value)}
+            />
+          </CardContent>
+        </Card>
+      )}
 
+      <Card>
+        <CardHeader>
+          <CardTitle>Safety</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
           <Field
             label="Keep missing models for"
             htmlFor="grace-days"
@@ -102,9 +132,10 @@ export function SettingsForm({ initial }: { initial: Settings }) {
       </Card>
 
       <Card>
-        <CardContent className="space-y-4 p-4">
-          <h2 className="text-sm font-semibold">Browsing</h2>
-
+        <CardHeader>
+          <CardTitle>Browsing</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
           <Field
             label="Load meshes in the viewer up to"
             htmlFor="viewer-max"
@@ -139,9 +170,10 @@ export function SettingsForm({ initial }: { initial: Settings }) {
       </Card>
 
       <Card>
-        <CardContent className="space-y-4 p-4">
-          <h2 className="text-sm font-semibold">Diagnostics</h2>
-
+        <CardHeader>
+          <CardTitle>Diagnostics</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
           <Field
             label="Keep the audit trail for"
             htmlFor="audit-days"
@@ -213,12 +245,7 @@ function Toggle({
 }) {
   return (
     <label className="flex cursor-pointer items-start gap-3">
-      <input
-        type="checkbox"
-        checked={checked}
-        onChange={(e) => onChange(e.target.checked)}
-        className="mt-1"
-      />
+      <Checkbox checked={checked} onChange={(e) => onChange(e.target.checked)} className="mt-0.5" />
       <span className="min-w-0">
         <span className="block text-sm font-medium text-[var(--color-ink)]">{label}</span>
         <span className="block text-xs text-[var(--color-ink-faint)]">{hint}</span>

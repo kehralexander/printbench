@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { Loader2, Play } from 'lucide-react'
 import type { SlotAssignment } from '@pb/core'
 import { Button } from '@/components/ui/button'
+import { Swatch as SharedSwatch } from '@/components/ui/swatch'
 import type { SlotChoice } from './send-actions'
 
 /**
@@ -100,11 +101,5 @@ export function SlotChooser({
 }
 
 function Swatch({ hex }: { hex?: string }) {
-  return (
-    <span
-      aria-hidden
-      className="inline-block size-3.5 shrink-0 rounded-full border border-[var(--color-border)]"
-      style={{ background: hex ?? 'transparent' }}
-    />
-  )
+  return <SharedSwatch color={hex} className="size-3.5" />
 }

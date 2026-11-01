@@ -1,5 +1,5 @@
 import { can, getSettings } from '@pb/core'
-import { getSessionUser } from '@pb/auth'
+import { getSessionUser, ssoProviderName } from '@pb/auth'
 import { getDb } from '@pb/db'
 import { PageHeader } from '@/components/shell/page-header'
 import { NotPermitted } from '@/components/shell/not-permitted'
@@ -22,7 +22,7 @@ export default async function SettingsPage() {
         title="System settings"
         description="Instance-wide options. Anything that belongs to one library is on that library instead."
       />
-      <SettingsForm initial={settings} />
+      <SettingsForm initial={settings} ssoProvider={ssoProviderName()} />
     </>
   )
 }

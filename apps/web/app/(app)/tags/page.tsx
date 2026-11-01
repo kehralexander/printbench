@@ -27,13 +27,13 @@ export default async function TagsPage() {
         description={
           tags.length === 0
             ? 'Tags you add to models appear here.'
-            : `${tags.length} tag${tags.length === 1 ? '' : 's'}, ${used} in use`
+            : `${tags.length} tag${tags.length === 1 ? '' : 's'} · ${used} in use`
         }
       />
 
       {tags.length === 0 ? (
         <EmptyState
-          icon={<Tags className="size-6" />}
+          icon={<Tags />}
           title="No tags yet"
           description="Open a model, press Edit, and add a few. Tags are what make a large library searchable by anything other than name."
           action={

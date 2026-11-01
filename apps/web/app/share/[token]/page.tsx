@@ -1,11 +1,15 @@
 import { notFound } from 'next/navigation'
 import { sql } from 'drizzle-orm'
-import { Box, FileStack } from 'lucide-react'
+import { Box, Download, FileStack } from 'lucide-react'
 import { getSettings, modelByShareToken } from '@pb/core'
 import { getDb } from '@pb/db'
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { formatBytes } from '@/components/model/model-card'
+import { Button } from '@/components/ui/button'
+import { SectionHeader } from '@/components/ui/section-header'
+import { PageHeader } from '@/components/shell/page-header'
+import { formatBytes } from '@/lib/format'
+import { compareFiles } from '@/app/(app)/models/[publicId]/file-tree-order'
 import { ShareViewer } from './share-viewer'
 
 export const dynamic = 'force-dynamic'
@@ -63,7 +67,11 @@ export default async function SharePage({ params }: { params: Promise<{ token: s
     SELECT id, filename, extension, category, size, thumb_state, thumb_key
     FROM model_files
     WHERE model_id = ${model.id} AND missing_at IS NULL
-    ORDER BY category, filename`)
+    ORDER BY filename`)
+
+  // The same order as the model page's file list, so a shared model reads the
+  // way its owner sees it: printable 3MFs first, then STLs, then the rest.
+  const ordered = [...files.rows].sort(compareFiles)
 
   const totalSize = files.rows.reduce((sum, file) => sum + Number(file.size), 0)
   const hero = files.rows
@@ -81,17 +89,12 @@ export default async function SharePage({ params }: { params: Promise<{ token: s
 
   return (
     <main className="mx-auto max-w-4xl px-5 py-10 sm:px-8">
-      <header className="mb-6">
-        <p className="text-xs uppercase tracking-wide text-[var(--color-ink-faint)]">
-          Shared from {siteName}
-        </p>
-        <h1 className="mt-1 text-2xl font-semibold tracking-tight">{model.name}</h1>
-        {model.creatorName && (
-          <p className="mt-1 text-sm text-[var(--color-ink-muted)]">by {model.creatorName}</p>
-        )}
-        {model.notes && (
-          <p className="mt-3 max-w-2xl text-sm text-[var(--color-ink-muted)]">{model.notes}</p>
-        )}
+      <PageHeader
+        eyebrow={`Shared from ${siteName}`}
+        title={model.name}
+        description={model.creatorName ? `by ${model.creatorName}` : undefined}
+      >
+        {model.notes && <p className="mt-2 max-w-2xl">{model.notes}</p>}
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <Badge tone="neutral">
             <FileStack className="size-3" />
@@ -99,7 +102,7 @@ export default async function SharePage({ params }: { params: Promise<{ token: s
           </Badge>
           {model.license && <Badge tone="neutral">{model.license}</Badge>}
         </div>
-      </header>
+      </PageHeader>
 
       <ShareViewer
         token={token}
@@ -112,17 +115,14 @@ export default async function SharePage({ params }: { params: Promise<{ token: s
       />
 
       <section className="mt-6">
-        <h2 className="mb-2 flex items-center gap-2 text-sm font-semibold">
-          <Box className="size-4" />
-          Files
-        </h2>
+        <SectionHeader title="Files" icon={<Box />} />
         <Card className="overflow-hidden">
           <ul className="divide-y divide-[var(--color-border)]">
-            {files.rows.map((file) => (
+            {ordered.map((file) => (
               <li key={file.id} className="flex items-center gap-3 px-4 py-2.5">
-                <span className="w-10 shrink-0 rounded bg-[var(--color-surface-2)] px-1.5 py-0.5 text-center text-[10px] font-medium uppercase text-[var(--color-ink-faint)]">
+                <Badge className="min-w-12 shrink-0 justify-center uppercase">
                   {file.extension || 'Unknown'}
-                </span>
+                </Badge>
                 <span className="min-w-0 flex-1 truncate text-sm">{file.filename}</span>
                 <span className="shrink-0 text-xs tabular-nums text-[var(--color-ink-muted)]">
                   {formatBytes(Number(file.size))}
@@ -131,12 +131,16 @@ export default async function SharePage({ params }: { params: Promise<{ token: s
                  * The token travels with the request: this page is anonymous,
                  * so there is no session for the file route to check.
                  */}
-                <a
-                  href={`/api/share/${token}/files/${file.id}`}
-                  className="shrink-0 text-xs text-[var(--color-accent)] hover:underline"
-                >
-                  Download
-                </a>
+                <Button asChild variant="ghost" size="sm" className="shrink-0">
+                  {/* Icon only on a phone, so the file name keeps the width. */}
+                  <a
+                    href={`/api/share/${token}/files/${file.id}`}
+                    aria-label={`Download ${file.filename}`}
+                  >
+                    <Download />
+                    <span className="hidden sm:inline">Download</span>
+                  </a>
+                </Button>
               </li>
             ))}
           </ul>

@@ -232,6 +232,18 @@ export interface ListProblemOptions {
   includeIgnored?: boolean
   limit?: number
   offset?: number
+  /** Worst first by default; otherwise by when it was found, or by model name. */
+  sort?: ProblemSort
+}
+
+export type ProblemSort = 'severity' | 'newest' | 'oldest' | 'name'
+
+const PROBLEM_ORDER: Record<ProblemSort, ReturnType<typeof sql>> = {
+  // Worst first, then oldest: severity is an enum in that order.
+  severity: sql`p.severity DESC, p.created_at ASC, p.id`,
+  newest: sql`p.created_at DESC, p.id`,
+  oldest: sql`p.created_at ASC, p.id`,
+  name: sql`lower(m.name) ASC NULLS LAST, p.severity DESC, p.id`,
 }
 
 export async function listProblems(
@@ -270,8 +282,7 @@ export async function listProblems(
     LEFT JOIN libraries l ON l.id = m.library_id
     LEFT JOIN model_files f ON f.id = p.model_file_id
     WHERE ${sql.join(conditions, sql` AND `)}
-    -- Worst first, then oldest: severity is an enum in that order.
-    ORDER BY p.severity DESC, p.created_at ASC, p.id
+    ORDER BY ${PROBLEM_ORDER[options.sort ?? 'severity']}
     LIMIT ${limit} OFFSET ${Math.max(options.offset ?? 0, 0)}
   `)
 

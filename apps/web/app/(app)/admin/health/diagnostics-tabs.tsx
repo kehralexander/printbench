@@ -28,7 +28,7 @@ export function DiagnosticsTabs({ tabs }: { tabs: DiagnosticsTab[] }) {
             href={tab.href}
             aria-current={active ? 'page' : undefined}
             className={cn(
-              '-mb-px whitespace-nowrap border-b-2 px-3 py-2 text-sm transition-colors',
+              '-mb-px whitespace-nowrap border-b-2 px-2.5 py-2 text-sm transition-colors sm:px-3',
               active
                 ? 'border-[var(--color-accent)] font-medium text-[var(--color-accent)]'
                 : 'border-transparent text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]',

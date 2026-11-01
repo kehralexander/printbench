@@ -1,7 +1,7 @@
 import Link from 'next/link'
 import type { Route } from 'next'
-import { History } from 'lucide-react'
-import { listPrints, printStats, unratedPrints, type PrintStatus } from '@pb/core'
+import { BarChart3, History } from 'lucide-react'
+import { listPrints, printStats, unratedPrints, type PrintSort, type PrintStatus } from '@pb/core'
 import { getDb } from '@pb/db'
 import { getSessionUser } from '@pb/auth'
 import { can } from '@pb/core'
@@ -11,6 +11,10 @@ import { Card } from '@/components/ui/card'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Button } from '@/components/ui/button'
 import { AutoRefresh } from '@/components/ui/auto-refresh'
+import { FilterTabs } from '@/components/ui/filter-tabs'
+import { UrlSortControl } from '@/components/ui/sort-control'
+import { formatGrams } from '@/lib/format'
+import { pickSort, type SortOption } from '@/lib/sort'
 import { PrintTimeline } from './print-timeline'
 import { UnratedPrints } from './unrated-prints'
 
@@ -29,10 +33,18 @@ const FILTERS: { key: string; label: string; status?: PrintStatus[] }[] = [
   { key: 'running', label: 'Still printing', status: ['in_progress'] },
 ]
 
+const SORTS: SortOption<PrintSort>[] = [
+  { value: 'newest', label: 'Newest' },
+  { value: 'oldest', label: 'Oldest' },
+  { value: 'longest', label: 'Longest' },
+  { value: 'filament', label: 'Most filament' },
+  { value: 'name', label: 'Model name' },
+]
+
 export default async function PrintsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ filter?: string; page?: string }>
+  searchParams: Promise<{ filter?: string; page?: string; sort?: string }>
 }) {
   const user = await getSessionUser()
   if (!can({ id: user?.id ?? '', role: user?.role ?? null }, 'model:view')) {
@@ -42,6 +54,7 @@ export default async function PrintsPage({
   const params = await searchParams
   const filter = FILTERS.find((option) => option.key === params.filter) ?? FILTERS[0]!
   const page = Math.max(Number(params.page ?? 1) || 1, 1)
+  const sort = pickSort(params.sort, SORTS, 'newest')
 
   const db = getDb()
   const canRate = can({ id: user?.id ?? '', role: user?.role ?? null }, 'print:log')
@@ -50,13 +63,28 @@ export default async function PrintsPage({
       status: filter.status,
       limit: PAGE_SIZE,
       offset: (page - 1) * PAGE_SIZE,
+      sort,
     }),
     printStats(db),
     canRate && page === 1 ? unratedPrints(db, 10) : Promise.resolve([]),
   ])
 
   const hasMore = prints.length === PAGE_SIZE
-  const link = (target: number): Route => `/prints?filter=${filter.key}&page=${target}` as Route
+  // Every link keeps the sort; switching filter starts again from page one.
+  const href = (filterKey: string, target = 1): Route => {
+    const query = new URLSearchParams({ filter: filterKey })
+    if (target > 1) query.set('page', String(target))
+    if (sort !== 'newest') query.set('sort', sort)
+    return `/prints?${query}` as Route
+  }
+  const link = (target: number) => href(filter.key, target)
+  // Newest-first pages run back in time; any other order just runs on.
+  const [backLabel, onLabel] =
+    sort === 'newest'
+      ? ['Newer', 'Older']
+      : sort === 'oldest'
+        ? ['Older', 'Newer']
+        : ['Previous', 'Next']
 
   return (
     <>
@@ -75,6 +103,14 @@ export default async function PrintsPage({
                 stats.totalDurationMin,
               )
         }
+        actions={
+          <Button asChild variant="secondary" size="sm">
+            <Link href="/prints/stats">
+              <BarChart3 />
+              Success rates
+            </Link>
+          </Button>
+        }
       />
 
       <UnratedPrints
@@ -84,28 +120,13 @@ export default async function PrintsPage({
         }))}
       />
 
-      <nav className="mb-4 flex flex-wrap items-center gap-1.5">
-        {FILTERS.map((option) => (
-          <Link
-            key={option.key}
-            href={`/prints?filter=${option.key}` as Route}
-            aria-current={option.key === filter.key ? 'page' : undefined}
-            className={
-              option.key === filter.key
-                ? 'rounded-full bg-[var(--color-accent-soft)] px-3 py-1 text-sm font-medium text-[var(--color-accent)]'
-                : 'rounded-full px-3 py-1 text-sm text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-2)]'
-            }
-          >
-            {option.label}
-          </Link>
-        ))}
-        <Link
-          href={'/prints/stats' as Route}
-          className="ml-auto text-sm text-[var(--color-accent)] hover:underline"
-        >
-          Success rates
-        </Link>
-      </nav>
+      <FilterTabs
+        options={FILTERS.map((option) => ({ ...option, href: href(option.key) }))}
+        current={filter.key}
+        trailing={
+          <UrlSortControl options={SORTS} value={sort} defaultValue="newest" count={stats.total} />
+        }
+      />
 
       {prints.length === 0 ? (
         /*
@@ -115,7 +136,7 @@ export default async function PrintsPage({
          * counts one is just wrong.
          */
         <EmptyState
-          icon={<History className="size-6" />}
+          icon={<History />}
           title={
             page > 1
               ? 'Nothing on this page'
@@ -132,11 +153,7 @@ export default async function PrintsPage({
           }
           action={
             <Button asChild variant="secondary">
-              <Link
-                href={
-                  page > 1 ? link(page - 1) : stats.total === 0 ? '/models' : ('/prints' as Route)
-                }
-              >
+              <Link href={page > 1 ? link(page - 1) : stats.total === 0 ? '/models' : href('all')}>
                 {page > 1
                   ? 'Previous page'
                   : stats.total === 0
@@ -181,14 +198,14 @@ export default async function PrintsPage({
         <div className="mt-4 flex items-center justify-between">
           {page > 1 ? (
             <Button asChild variant="secondary" size="sm">
-              <Link href={link(page - 1)}>Newer</Link>
+              <Link href={link(page - 1)}>{backLabel}</Link>
             </Button>
           ) : (
             <span />
           )}
           {hasMore && (
             <Button asChild variant="secondary" size="sm">
-              <Link href={link(page + 1)}>Older</Link>
+              <Link href={link(page + 1)}>{onLabel}</Link>
             </Button>
           )}
         </div>
@@ -206,13 +223,7 @@ function summarise(
   const parts = [`${total} print${total === 1 ? '' : 's'} logged`]
   // Null, not zero: nothing has settled yet, so there is no rate to quote.
   if (successRate != null) parts.push(`${Math.round(successRate * 100)}% success`)
-  if (filamentG > 0) {
-    parts.push(
-      filamentG >= 1000
-        ? `${(filamentG / 1000).toFixed(2)} kg filament`
-        : `${Math.round(filamentG)} g filament`,
-    )
-  }
+  if (filamentG > 0) parts.push(`${formatGrams(filamentG)} filament`)
   if (durationMin > 0) parts.push(`${Math.round(durationMin / 60)} hours on the plate`)
   return parts.join(' · ')
 }

@@ -67,28 +67,48 @@ const AGGREGATES = sql`
     FILTER (WHERE failed_at IS NOT NULL) AS typical_failure_at,
   count(failed_at)::int AS failures_with_progress`
 
-/** Groups with a failure first, most failures first; then the busiest. */
-const ORDER = sql`ORDER BY failures DESC, total DESC, label ASC`
+export type OutcomeSort = 'failures' | 'rate' | 'prints' | 'name'
 
-export async function printOutcomeStats(db: Database, limit = 50): Promise<OutcomeStats> {
+/* Applied over the grouped rows, so the orders can work with the aggregates' names. */
+const ORDERS: Record<OutcomeSort, ReturnType<typeof sql>> = {
+  /** Groups with a failure first, most failures first; then the busiest. */
+  failures: sql`ORDER BY failures DESC, total DESC, label ASC`,
+  /** Worst success rate first, so the trouble sits at the top. */
+  rate: sql`ORDER BY successes::float / total ASC, total DESC, label ASC`,
+  prints: sql`ORDER BY total DESC, failures DESC, label ASC`,
+  name: sql`ORDER BY lower(label) ASC`,
+}
+
+export async function printOutcomeStats(
+  db: Database,
+  limit = 50,
+  sort: OutcomeSort = 'failures',
+): Promise<OutcomeStats> {
   const cap = Math.min(Math.max(limit, 1), 200)
+  const order = ORDERS[sort]
   const [byModel, byFile, byMaterial] = await Promise.all([
     db.execute<Grouped>(sql`
       WITH settled AS (${SETTLED})
-      SELECT model_id::text AS key, min(model_name) AS label,
-             min(model_public_id) AS model_public_id, ${AGGREGATES}
-      FROM settled GROUP BY model_id ${ORDER} LIMIT ${cap}`),
+      SELECT * FROM (
+        SELECT model_id::text AS key, min(model_name) AS label,
+               min(model_public_id) AS model_public_id, ${AGGREGATES}
+        FROM settled GROUP BY model_id
+      ) g ${order} LIMIT ${cap}`),
     db.execute<Grouped>(sql`
       WITH settled AS (${SETTLED})
-      SELECT model_file_id::text AS key, min(filename) || ' · ' || min(model_name) AS label,
-             min(model_public_id) AS model_public_id, ${AGGREGATES}
-      FROM settled WHERE model_file_id IS NOT NULL AND filename IS NOT NULL
-      GROUP BY model_file_id ${ORDER} LIMIT ${cap}`),
+      SELECT * FROM (
+        SELECT model_file_id::text AS key, min(filename) || ' · ' || min(model_name) AS label,
+               min(model_public_id) AS model_public_id, ${AGGREGATES}
+        FROM settled WHERE model_file_id IS NOT NULL AND filename IS NOT NULL
+        GROUP BY model_file_id
+      ) g ${order} LIMIT ${cap}`),
     db.execute<Grouped>(sql`
       WITH settled AS (${SETTLED})
-      SELECT coalesce(material, '') AS key, coalesce(material, 'Not recorded') AS label,
-             NULL AS model_public_id, ${AGGREGATES}
-      FROM settled GROUP BY material ${ORDER} LIMIT ${cap}`),
+      SELECT * FROM (
+        SELECT coalesce(material, '') AS key, coalesce(material, 'Not recorded') AS label,
+               NULL AS model_public_id, ${AGGREGATES}
+        FROM settled GROUP BY material
+      ) g ${order} LIMIT ${cap}`),
   ])
   return {
     byModel: byModel.rows.map(toRow),

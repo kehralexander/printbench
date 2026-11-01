@@ -110,12 +110,9 @@ test('browser scan, upload, thumbnail delivery and revoked permissions', async (
     await expect(page).toHaveURL('http://localhost:3000/')
 
     await page.goto('/admin/libraries')
-    const scanCard = page
-      .locator('div')
-      .filter({ has: page.getByRole('heading', { name: 'Smoke Scan Library', exact: true }) })
-      .filter({ has: page.getByRole('button', { name: 'Deep scan', exact: true }) })
-      .last()
-    await scanCard.getByRole('button', { name: 'Deep scan', exact: true }).click()
+    // Deep scan lives in each library's "More" menu.
+    await page.getByRole('button', { name: 'More actions for Smoke Scan Library' }).click()
+    await page.getByRole('menuitem', { name: 'Deep scan' }).click()
     await expect
       .poll(
         async () => {
@@ -164,7 +161,11 @@ test('browser scan, upload, thumbnail delivery and revoked permissions', async (
     // control. This exercises server enforcement, not just hiding a button.
     await page.goto('/admin/libraries')
     await db.execute(sql`UPDATE "user" SET role = 'viewer' WHERE email = ${email}`)
-    await page.getByRole('button', { name: 'Deep scan', exact: true }).first().click()
+    await page
+      .getByRole('button', { name: /^More actions for / })
+      .first()
+      .click()
+    await page.getByRole('menuitem', { name: 'Deep scan' }).click()
     await expect(page.getByText('Not permitted.', { exact: true })).toBeVisible()
     const runs = await db.execute<{ n: number }>(
       sql`SELECT count(*)::int AS n FROM scan_runs WHERE library_id IN (${scanId}, ${uploadId})`,

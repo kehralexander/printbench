@@ -36,6 +36,12 @@ export interface Settings {
   auditRetentionDays: number
   /** Days captured application logs are kept. */
   logRetentionDays: number
+  /**
+   * Show only the SSO button on the sign-in page. Has no effect unless OIDC
+   * is configured, and `/login?password=1` still shows the form, so a broken
+   * identity provider cannot lock everyone out.
+   */
+  hidePasswordLogin: boolean
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -48,6 +54,7 @@ export const DEFAULT_SETTINGS: Settings = {
   writeSidecars: true,
   auditRetentionDays: 365,
   logRetentionDays: 14,
+  hidePasswordLogin: false,
 }
 
 export class SettingsValidationError extends Error {
@@ -76,6 +83,7 @@ export function validate<K extends keyof Settings>(key: K, value: unknown): Sett
     case 'publicSharing':
     case 'trackMetadataProblems':
     case 'writeSidecars':
+    case 'hidePasswordLogin':
       return Boolean(value) as Settings[K]
 
     case 'defaultRole': {

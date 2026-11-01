@@ -12,7 +12,7 @@ import { getDb } from '@pb/db'
 import { PageHeader } from '@/components/shell/page-header'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Button } from '@/components/ui/button'
-import { ModelCard, formatDimensions } from '@/components/model/model-card'
+import { ModelGrid } from '@/components/model/model-grid'
 import { SearchBox } from './search-box'
 import { FacetPanel } from './facet-panel'
 import { parseSearchParams, buildHref, type ParsedSearchParams, type RawParams } from './params'
@@ -167,25 +167,7 @@ export default async function ModelsPage({ searchParams }: { searchParams: Promi
             />
           ) : (
             <>
-              <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 xl:grid-cols-4">
-                {result.hits.map((hit) => (
-                  <ModelCard
-                    key={hit.id}
-                    publicId={hit.publicId}
-                    name={hit.name}
-                    path={hit.path}
-                    fileCount={hit.fileCount}
-                    totalSize={hit.totalSize}
-                    libraryName={hit.libraryName}
-                    previewExtension={hit.previewExtension}
-                    isPackage={hit.isPackage}
-                    previewImageFileId={hit.previewImageFileId}
-                    thumbFileId={hit.thumbFileId}
-                    thumbKey={hit.thumbKey}
-                    dimensions={formatDimensions(hit.bboxX ?? 0, hit.bboxY ?? 0, hit.bboxZ ?? 0)}
-                  />
-                ))}
-              </div>
+              <ModelGrid models={result.hits} />
 
               <Pagination raw={raw} page={page} result={result} />
             </>

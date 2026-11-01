@@ -3,6 +3,7 @@
 import { useOptimistic, useTransition } from 'react'
 import { Heart } from 'lucide-react'
 import { cn } from '@/lib/cn'
+import { Button } from '@/components/ui/button'
 import { toggleLiked } from '../../lists/actions'
 
 /**
@@ -17,8 +18,10 @@ export function LikeButton({ publicId, liked: initial }: { publicId: string; lik
   const [liked, setLiked] = useOptimistic(initial)
 
   return (
-    <button
+    <Button
       type="button"
+      variant="ghost"
+      size="icon"
       aria-pressed={liked}
       aria-label={liked ? 'Remove from liked' : 'Add to liked'}
       title={liked ? 'Liked' : 'Like'}
@@ -29,14 +32,13 @@ export function LikeButton({ publicId, liked: initial }: { publicId: string; lik
           await toggleLiked(publicId)
         })
       }
-      className="flex size-9 items-center justify-center rounded-[var(--radius-control)] text-[var(--color-ink-muted)] transition-colors hover:bg-[var(--color-surface-2)] disabled:opacity-60"
     >
       <Heart
         className={cn(
-          'size-4 transition-colors',
+          'transition-colors',
           liked && 'fill-[var(--color-danger)] text-[var(--color-danger)]',
         )}
       />
-    </button>
+    </Button>
   )
 }

@@ -1,6 +1,8 @@
 import Link from 'next/link'
 import { sql } from 'drizzle-orm'
-import { Boxes, ClipboardList, HardDrive, History, Printer, Wrench } from 'lucide-react'
+import { Boxes, ClipboardList, HardDrive, History, Wrench } from 'lucide-react'
+import { cn } from '@/lib/cn'
+import { PRINT_OUTCOME, type PrintOutcome } from '@/lib/print-outcome'
 import {
   can,
   listRequests,
@@ -15,14 +17,22 @@ import {
 import { getSessionUser } from '@pb/auth'
 import { getDb } from '@pb/db'
 import { PageHeader } from '@/components/shell/page-header'
-import { Card, CardContent } from '@/components/ui/card'
+import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Button } from '@/components/ui/button'
 import { ModelCard, formatDimensions } from '@/components/model/model-card'
 import { ClockTime } from '@/components/ui/clock-time'
 import { AutoRefresh } from '@/components/ui/auto-refresh'
+import { StatTile } from '@/components/ui/stat-tile'
+import { SectionHeader } from '@/components/ui/section-header'
 import { LiveProgressBar } from '@/components/printer/live-progress'
+import {
+  printDoneAt,
+  printerState,
+  type PrinterStateTone,
+} from '@/components/printer/printer-state'
+import { formatDate } from '@/lib/format'
 import { UnratedPrints } from './prints/unrated-prints'
 
 export const dynamic = 'force-dynamic'
@@ -116,7 +126,7 @@ interface PrinterLine {
   id: string
   name: string
   label: string
-  tone: 'accent' | 'danger' | 'neutral'
+  tone: PrinterStateTone
   filename: string | null
   /** 0..1 */
   progress: number | null
@@ -156,55 +166,17 @@ function printerLine(printer: PrinterSnapshot): PrinterLine {
       label: printer.status ? 'No recent reading' : 'Not read yet',
       tone: 'neutral',
     }
-  if (status.state === 'offline' || status.state === 'error') {
-    return { ...base, label: status.state === 'offline' ? 'Offline' : 'Error', tone: 'danger' }
-  }
-  if (!status.busy) return { ...base, label: 'Idle', tone: 'neutral' }
+  const state = printerState(status.state)
+  if (!status.busy) return { ...base, ...state }
   return {
     ...base,
-    label: status.state === 'paused' ? 'Paused' : 'Printing',
-    tone: 'accent',
+    ...state,
     filename: status.filename?.split('/').pop() ?? null,
     progress: status.progress ?? null,
     remainingSec: status.remainingSec ?? null,
     paused: status.state === 'paused',
-    doneAt:
-      status.state === 'printing' && status.remainingSec != null
-        ? new Date(Date.now() + (status.remainingSec - ageSec) * 1000).toISOString()
-        : null,
+    doneAt: printDoneAt(status, Date.now() - ageSec * 1000),
   }
-}
-
-function Stat({
-  label,
-  value,
-  icon: Icon,
-  href,
-}: {
-  label: string
-  value: string
-  icon: React.ComponentType<{ className?: string }>
-  href?: '/models' | '/prints' | '/admin/libraries' | '/admin/users'
-}) {
-  const body = (
-    <CardContent className="flex items-center gap-3 p-4">
-      <span className="flex size-9 items-center justify-center rounded-[var(--radius-control)] bg-[var(--color-surface-2)] text-[var(--color-ink-faint)]">
-        <Icon className="size-4" />
-      </span>
-      <div className="min-w-0">
-        <p className="text-xl font-semibold tabular-nums leading-tight">{value}</p>
-        <p className="truncate text-xs text-[var(--color-ink-muted)]">{label}</p>
-      </div>
-    </CardContent>
-  )
-
-  return href ? (
-    <Card className="transition-shadow hover:shadow-[var(--shadow-card)]">
-      <Link href={href}>{body}</Link>
-    </Card>
-  ) : (
-    <Card>{body}</Card>
-  )
 }
 
 export default async function DashboardPage() {
@@ -248,24 +220,25 @@ export default async function DashboardPage() {
         description="Your print library at a glance."
       />
 
-      <div className="mb-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Stat label="Models" value={NUMBER.format(stats.models)} icon={Boxes} href="/models" />
-        <Stat label="Files" value={NUMBER.format(stats.files)} icon={Wrench} />
-        <Stat
-          label={
-            /*
-             * Null, not zero, when nothing has settled: a print still running is
-             * not a failed one, and a 0% badge on a new library reads as broken.
-             */
+      <div className="mb-8 grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <StatTile label="Models" value={NUMBER.format(stats.models)} icon={Boxes} href="/models" />
+        <StatTile label="Files" value={NUMBER.format(stats.files)} icon={Wrench} />
+        <StatTile
+          label="Prints logged"
+          /*
+           * Null, not zero, when nothing has settled: a print still running is
+           * not a failed one, and a 0% badge on a new library reads as broken.
+           */
+          hint={
             prints.successRate == null
-              ? 'Prints logged'
-              : `Prints logged · ${Math.round(prints.successRate * 100)}% success`
+              ? undefined
+              : `${Math.round(prints.successRate * 100)}% success`
           }
           value={NUMBER.format(prints.total)}
           icon={History}
           href="/prints"
         />
-        <Stat
+        <StatTile
           label="Libraries"
           value={NUMBER.format(stats.libraries)}
           icon={HardDrive}
@@ -282,18 +255,13 @@ export default async function DashboardPage() {
 
       {printers.length > 0 && (
         <section className="mb-8">
-          <div className="mb-3 flex items-center justify-between">
-            <h2 className="text-sm font-semibold">Printers</h2>
-            <Link href="/printers" className="text-sm text-[var(--color-accent)] hover:underline">
-              Printer status
-            </Link>
-          </div>
+          <SectionHeader title="Printers" href="/printers" />
 
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {printers.map((printer) => (
               <Card
                 key={printer.id}
-                className="transition-shadow hover:shadow-[var(--shadow-card)]"
+                className="transition-colors hover:border-[var(--color-border-strong)]"
               >
                 <Link href="/printers" className="block space-y-2 p-4">
                   <div className="flex items-center justify-between gap-2">
@@ -332,12 +300,7 @@ export default async function DashboardPage() {
 
       {queued.length > 0 && (
         <section className="mb-8">
-          <div className="mb-3 flex items-center justify-between">
-            <h2 className="text-sm font-semibold">Waiting to print</h2>
-            <Link href="/queue" className="text-sm text-[var(--color-accent)] hover:underline">
-              Print queue
-            </Link>
-          </div>
+          <SectionHeader title="Waiting to print" href="/queue" />
 
           <Card className="overflow-hidden">
             <ul className="divide-y divide-[var(--color-border)]">
@@ -413,12 +376,7 @@ export default async function DashboardPage() {
         />
       ) : (
         <section className="mb-8">
-          <div className="mb-3 flex items-center justify-between">
-            <h2 className="text-sm font-semibold">Recently added</h2>
-            <Link href="/models" className="text-sm text-[var(--color-accent)] hover:underline">
-              All models
-            </Link>
-          </div>
+          <SectionHeader title="Recently added" href="/models" />
 
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
             {models.map((model) => (
@@ -448,12 +406,7 @@ export default async function DashboardPage() {
 
       {latestPrints.length > 0 && (
         <section>
-          <div className="mb-3 flex items-center justify-between">
-            <h2 className="text-sm font-semibold">Latest prints</h2>
-            <Link href="/prints" className="text-sm text-[var(--color-accent)] hover:underline">
-              Print history
-            </Link>
-          </div>
+          <SectionHeader title="Latest prints" href="/prints" />
 
           <Card className="overflow-hidden">
             <ul className="divide-y divide-[var(--color-border)]">
@@ -462,21 +415,22 @@ export default async function DashboardPage() {
                   key={`${print.public_id}-${index}`}
                   className="flex items-center gap-3 px-4 py-2.5"
                 >
-                  <Printer className="size-4 shrink-0 text-[var(--color-ink-faint)]" />
+                  <OutcomeIcon status={print.status} />
                   <Link
                     href={`/models/${print.public_id}`}
                     className="min-w-0 flex-1 truncate text-sm hover:underline"
                   >
                     {print.model_name}
                   </Link>
+                  {/* Icon and word, as in the print history. */}
+                  <span className="shrink-0 text-xs text-[var(--color-ink-faint)]">
+                    {(PRINT_OUTCOME[print.status as PrintOutcome] ?? PRINT_OUTCOME.success).label}
+                  </span>
                   <span className="hidden shrink-0 text-xs text-[var(--color-ink-muted)] sm:inline">
                     {[print.printer_name, print.material].filter(Boolean).join(' · ')}
                   </span>
                   <span className="shrink-0 text-xs text-[var(--color-ink-faint)]">
-                    {new Date(print.started_at ?? print.created_at).toLocaleDateString('en-GB', {
-                      day: 'numeric',
-                      month: 'short',
-                    })}
+                    {formatDate(print.started_at ?? print.created_at)}
                   </span>
                 </li>
               ))}
@@ -485,5 +439,21 @@ export default async function DashboardPage() {
         </section>
       )}
     </>
+  )
+}
+
+/** The print's outcome as the print history shows it, so a failure stands out here too. */
+function OutcomeIcon({ status }: { status: string }) {
+  const meta = PRINT_OUTCOME[status as PrintOutcome] ?? PRINT_OUTCOME.success
+  const Icon = meta.icon
+  return (
+    <Icon
+      aria-label={meta.label}
+      className={cn(
+        'size-4 shrink-0',
+        meta.textClass,
+        status === 'in_progress' && 'animate-spin motion-reduce:animate-none',
+      )}
+    />
   )
 }

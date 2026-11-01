@@ -10,14 +10,16 @@ import {
 import { getDb } from '@pb/db'
 import { NotPermitted } from '@/components/shell/not-permitted'
 import { PageHeader } from '@/components/shell/page-header'
+import { pickSort } from '@/lib/sort'
 import { FilamentLibrary } from './library'
+import { SPOOLMAN_SORTS } from './sort'
 import { SpoolmanInventory } from './spoolman-inventory'
 export const dynamic = 'force-dynamic'
 export const metadata = { title: 'Filaments' }
 export default async function FilamentsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ archived?: string }>
+  searchParams: Promise<{ archived?: string; sort?: string }>
 }) {
   const user = await getSessionUser()
   if (!can(user, 'filament:view')) return <NotPermitted what="the filament library" />
@@ -38,23 +40,19 @@ export default async function FilamentsPage({
           result={result}
           baseUrl={spoolman}
           showArchived={params.archived === '1'}
+          sort={pickSort(params.sort, SPOOLMAN_SORTS, 'name')}
         />
       </>
     )
   }
 
   const [spools, filaments] = await Promise.all([listSpools(getDb()), listFilaments(getDb())])
+  // The library renders its own header: its "Add spool" action opens a form in the list.
   return (
-    <>
-      <PageHeader
-        title="Filaments"
-        description="Your spools, what’s left, and what you’ve printed with them."
-      />
-      <FilamentLibrary
-        spools={spools}
-        filaments={filaments}
-        canManage={can(user, 'filament:manage')}
-      />
-    </>
+    <FilamentLibrary
+      spools={spools}
+      filaments={filaments}
+      canManage={can(user, 'filament:manage')}
+    />
   )
 }

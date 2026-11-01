@@ -1,4 +1,4 @@
-import { and, desc, eq, ilike, inArray, lt, or, sql, type SQL } from 'drizzle-orm'
+import { and, asc, desc, eq, ilike, inArray, or, sql, type SQL } from 'drizzle-orm'
 import { schema, type Database } from '@pb/db'
 import { LOG_LEVELS, type LogLevel } from './log-capture'
 import type { ProcessRole } from './process-role'
@@ -13,10 +13,14 @@ export interface LogFilter {
   query?: string
   /** Page backwards: only entries older than this id. */
   beforeId?: number
+  /** Page forwards: only entries newer than this id. Used when reading oldest first. */
+  afterId?: number
+  /** Newest first by default; oldest first reads a run of events in the order they happened. */
+  order?: 'newest' | 'oldest'
   limit?: number
 }
 
-/** Newest first. */
+/** Newest first, unless asked for oldest first. */
 export async function listLogs(db: Database, filter: LogFilter = {}): Promise<LogEntry[]> {
   const t = schema.appLogs
   const conditions: (SQL | undefined)[] = []
@@ -25,7 +29,22 @@ export async function listLogs(db: Database, filter: LogFilter = {}): Promise<Lo
     conditions.push(inArray(t.level, LOG_LEVELS.slice(LOG_LEVELS.indexOf(filter.minLevel))))
   }
   if (filter.source) conditions.push(eq(t.source, filter.source))
-  if (filter.beforeId) conditions.push(lt(t.id, filter.beforeId))
+  /*
+   * Ordered by when each line was written, not by when it reached the table:
+   * the web app and the worker flush in batches, so ids interleave the two
+   * out of time order. A cursor is still an id; the line it names supplies
+   * the time to continue from.
+   */
+  if (filter.beforeId) {
+    conditions.push(
+      sql`(${t.at}, ${t.id}) < (SELECT at, id FROM app_logs WHERE id = ${filter.beforeId})`,
+    )
+  }
+  if (filter.afterId) {
+    conditions.push(
+      sql`(${t.at}, ${t.id}) > (SELECT at, id FROM app_logs WHERE id = ${filter.afterId})`,
+    )
+  }
   const query = filter.query?.trim()
   if (query) {
     const pattern = `%${query.replace(/[\\%_]/g, (char) => `\\${char}`)}%`
@@ -36,7 +55,7 @@ export async function listLogs(db: Database, filter: LogFilter = {}): Promise<Lo
     .select()
     .from(t)
     .where(and(...conditions))
-    .orderBy(desc(t.id))
+    .orderBy(...(filter.order === 'oldest' ? [asc(t.at), asc(t.id)] : [desc(t.at), desc(t.id)]))
     .limit(Math.min(filter.limit ?? 200, 10_000))
 }
 

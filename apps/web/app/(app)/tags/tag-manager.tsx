@@ -1,14 +1,19 @@
 'use client'
 
-import { useState, useTransition } from 'react'
+import { useMemo, useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import type { Route } from 'next'
-import { Check, Combine, Loader2, Pencil, Trash2, X } from 'lucide-react'
+import { Combine, Pencil, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
+import { Swatch } from '@/components/ui/swatch'
 import { Select } from '@/components/ui/select'
 import { Card } from '@/components/ui/card'
+import { EditableNameRow } from '@/components/ui/editable-name-row'
+import { ListToolbar } from '@/components/ui/list-toolbar'
+import { SortControl } from '@/components/ui/sort-control'
+import { DEFAULT_SWATCH } from '@/lib/swatch'
+import { compareText, type SortOption } from '@/lib/sort'
 import { merge, recolour, remove, rename } from './actions'
 
 /**
@@ -28,14 +33,30 @@ export interface TagView {
   modelCount: number
 }
 
+type TagSort = 'used' | 'name' | 'unused'
+
+const SORT_OPTIONS: SortOption<TagSort>[] = [
+  { value: 'used', label: 'Most used' },
+  { value: 'name', label: 'Name' },
+  // Unused tags are the ones worth tidying, so they get their own order.
+  { value: 'unused', label: 'Unused first' },
+]
+
+const COMPARE: Record<TagSort, (a: TagView, b: TagView) => number> = {
+  used: (a, b) => b.modelCount - a.modelCount || compareText(a.name, b.name),
+  name: (a, b) => compareText(a.name, b.name),
+  unused: (a, b) => a.modelCount - b.modelCount || compareText(a.name, b.name),
+}
+
 export function TagManager({ tags, canEdit }: { tags: TagView[]; canEdit: boolean }) {
   const router = useRouter()
   const [editing, setEditing] = useState<string | null>(null)
   const [merging, setMerging] = useState<string | null>(null)
-  const [draft, setDraft] = useState('')
+  const [sort, setSort] = useState<TagSort>('used')
   const [target, setTarget] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [pending, startTransition] = useTransition()
+  const sorted = useMemo(() => [...tags].sort(COMPARE[sort]), [tags, sort])
 
   function run(work: () => Promise<{ ok: boolean; error?: string }>) {
     setError(null)
@@ -53,50 +74,45 @@ export function TagManager({ tags, canEdit }: { tags: TagView[]; canEdit: boolea
 
   return (
     <div className="space-y-3">
+      <ListToolbar
+        className="mb-0"
+        sort={
+          <SortControl
+            options={SORT_OPTIONS}
+            value={sort}
+            onChange={setSort}
+            count={sorted.length}
+          />
+        }
+      />
+
       {error && <p className="text-sm text-[var(--color-danger)]">{error}</p>}
 
       <Card className="overflow-hidden">
         <ul className="divide-y divide-[var(--color-border)]">
-          {tags.map((tag) => (
+          {sorted.map((tag) => (
             <li key={tag.id} className="flex flex-wrap items-center gap-3 px-4 py-2.5">
               {canEdit ? (
                 <input
                   type="color"
                   aria-label={`Colour for ${tag.name}`}
-                  value={tag.color ?? '#8899aa'}
+                  value={tag.color ?? DEFAULT_SWATCH}
                   onChange={(e) => run(() => recolour(tag.id, e.target.value))}
                   className="size-6 shrink-0 cursor-pointer rounded-full border border-[var(--color-border)] bg-transparent p-0"
                 />
               ) : (
-                <span
-                  className="size-3 shrink-0 rounded-full ring-1 ring-inset ring-[var(--color-border)]"
-                  style={{ backgroundColor: tag.color ?? 'var(--color-surface-2)' }}
-                />
+                <Swatch color={tag.color} />
               )}
 
               {editing === tag.id ? (
-                <>
-                  <Input
-                    autoFocus
-                    value={draft}
-                    onChange={(e) => setDraft(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') run(() => rename(tag.id, draft))
-                      if (e.key === 'Escape') setEditing(null)
-                    }}
-                    className="h-8 max-w-56"
-                  />
-                  <Button
-                    size="sm"
-                    disabled={pending}
-                    onClick={() => run(() => rename(tag.id, draft))}
-                  >
-                    {pending ? <Loader2 className="animate-spin" /> : <Check />}
-                  </Button>
-                  <Button size="sm" variant="ghost" onClick={() => setEditing(null)}>
-                    <X />
-                  </Button>
-                </>
+                <EditableNameRow
+                  initial={tag.name}
+                  label={`Name of ${tag.name}`}
+                  pending={pending}
+                  onSave={(name) => run(() => rename(tag.id, name))}
+                  onCancel={() => setEditing(null)}
+                  className="max-w-56"
+                />
               ) : (
                 <>
                   <Link
@@ -117,7 +133,6 @@ export function TagManager({ tags, canEdit }: { tags: TagView[]; canEdit: boolea
                         aria-label={`Rename ${tag.name}`}
                         onClick={() => {
                           setEditing(tag.id)
-                          setDraft(tag.name)
                           setMerging(null)
                         }}
                       >
@@ -138,6 +153,7 @@ export function TagManager({ tags, canEdit }: { tags: TagView[]; canEdit: boolea
                         variant="ghost"
                         size="icon"
                         aria-label={`Remove ${tag.name}`}
+                        className="hover:text-[var(--color-danger)]"
                         onClick={() => {
                           if (
                             confirm(

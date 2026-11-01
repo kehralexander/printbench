@@ -2,16 +2,7 @@
 
 import { useEffect, useRef, useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
-import {
-  CheckCircle2,
-  CircleDashed,
-  Loader2,
-  Pencil,
-  Plus,
-  Star,
-  Trash2,
-  XCircle,
-} from 'lucide-react'
+import { Loader2, Pencil, Plus, Printer, Star, Trash2 } from 'lucide-react'
 import Link from 'next/link'
 import type { FilamentUsage, Spool, GcodeMetadata, PrintStatus } from '@pb/core'
 /*
@@ -28,11 +19,22 @@ import {
   type NozzleType,
 } from '@pb/core/prints'
 import { Button } from '@/components/ui/button'
+import { Swatch } from '@/components/ui/swatch'
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { Field } from '@/components/ui/field'
-import { Card, CardContent } from '@/components/ui/card'
+import { Card } from '@/components/ui/card'
+import { Checkbox } from '@/components/ui/checkbox'
+import { Dialog, DialogContent } from '@/components/ui/dialog'
+import { EmptyState } from '@/components/ui/empty-state'
+import { SectionHeader } from '@/components/ui/section-header'
+import { Textarea } from '@/components/ui/textarea'
+import { DEFAULT_SWATCH } from '@/lib/swatch'
+import { PRINT_OUTCOME } from '@/lib/print-outcome'
+import { usageLabel, usageTotal } from '@/lib/filament-usage'
 import { cn } from '@/lib/cn'
+import { formatDate, formatDuration, formatGrams } from '@/lib/format'
+import { Facts } from '@/components/ui/facts'
 import {
   editPrint,
   readSlicerSettings,
@@ -111,16 +113,6 @@ interface Props {
   canLog: boolean
 }
 
-const STATUS_META: Record<
-  PrintStatus,
-  { label: string; icon: typeof CheckCircle2; class: string }
-> = {
-  success: { label: 'Success', icon: CheckCircle2, class: 'text-[var(--color-success)]' },
-  failed: { label: 'Failed', icon: XCircle, class: 'text-[var(--color-danger)]' },
-  partial: { label: 'Partial', icon: CircleDashed, class: 'text-[var(--color-warning)]' },
-  in_progress: { label: 'Printing', icon: Loader2, class: 'text-[var(--color-accent)]' },
-}
-
 export function PrintHistory({
   publicId,
   prints,
@@ -170,52 +162,53 @@ export function PrintHistory({
 
   return (
     <section>
-      <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1">
-        <h2 className="text-sm font-semibold">Print history</h2>
-        <PrintSummary stats={stats} />
-        {canLog && !formOpen && (
-          <Button
-            variant="secondary"
-            size="sm"
-            className="ml-auto"
-            onClick={() => setFormOpen(true)}
-          >
-            <Plus />
-            Log a print
-          </Button>
-        )}
-      </div>
+      <SectionHeader
+        title="Print history"
+        meta={<PrintSummary stats={stats} />}
+        actions={
+          canLog && (
+            <Button variant="secondary" size="sm" onClick={() => setFormOpen(true)}>
+              <Plus />
+              Log a print
+            </Button>
+          )
+        }
+      />
 
-      {error && !formOpen && <p className="mb-2 text-sm text-[var(--color-danger)]">{error}</p>}
-
-      {(formOpen || editing) && (
-        <Card className="mb-3">
-          <CardContent className="p-4">
-            <PrintForm
-              key={editing?.id ?? 'new'}
-              publicId={publicId}
-              initial={editing}
-              spools={spools}
-              spoolInventory={spoolInventory}
-              files={files}
-              suggestions={suggestions}
-              pending={pending}
-              error={error}
-              onCancel={close}
-              onSubmit={submit}
-            />
-          </CardContent>
-        </Card>
+      {error && !formOpen && !editing && (
+        <p className="mb-2 text-sm text-[var(--color-danger)]">{error}</p>
       )}
 
+      {/* A dialog, like every other create or edit form in the app. */}
+      <Dialog open={formOpen || editing !== null} onOpenChange={(open) => !open && close()}>
+        <DialogContent title={editing ? 'Edit print' : 'Log a print'} size="lg">
+          <PrintForm
+            key={editing?.id ?? 'new'}
+            publicId={publicId}
+            initial={editing}
+            spools={spools}
+            spoolInventory={spoolInventory}
+            files={files}
+            suggestions={suggestions}
+            pending={pending}
+            error={error}
+            onCancel={close}
+            onSubmit={submit}
+          />
+        </DialogContent>
+      </Dialog>
+
       {prints.length === 0 ? (
-        <Card>
-          <CardContent className="p-6 text-center text-sm text-[var(--color-ink-muted)]">
-            Never printed.
-            {canLog &&
-              ' Log one once it comes off the plate. Settings that worked are worth keeping.'}
-          </CardContent>
-        </Card>
+        <EmptyState
+          icon={<Printer />}
+          title="Never printed"
+          description={
+            canLog
+              ? 'Log one once it comes off the plate. Settings that worked are worth keeping.'
+              : undefined
+          }
+          className="py-10"
+        />
       ) : (
         <Card className="overflow-hidden">
           <ol className="divide-y divide-[var(--color-border)]">
@@ -244,8 +237,9 @@ function PrintSummary({ stats }: { stats: PrintStatsView }) {
 
   return (
     <p className="text-xs text-[var(--color-ink-muted)]">
-      Printed {stats.total}
-      {stats.total === 1 ? ' time' : ' times'}
+      {/* "logged", not "printed": the count includes one still running, as
+          the print history page's own header does. */}
+      {stats.total} print{stats.total === 1 ? '' : 's'} logged
       {/*
        * Null, not zero: a model whose only print is still running has no
        * verdict yet, and showing 0% would read as a failure.
@@ -268,7 +262,7 @@ function PrintRow({
   onEdit: () => void
   onDelete: () => void
 }) {
-  const meta = STATUS_META[print.status]
+  const meta = PRINT_OUTCOME[print.status]
   const Icon = meta.icon
 
   /*
@@ -283,7 +277,12 @@ function PrintRow({
     .filter(Boolean)
     .join(' ')
 
-  const filament = [print.filamentBrand, print.material].filter(Boolean).join(' ')
+  // Spools logged against the print are listed below with their grams; the
+  // free-text brand, material, colour and total would only say it again.
+  const usage = print.filamentUsage
+  const filament = usage.length
+    ? null
+    : [print.filamentBrand, print.material].filter(Boolean).join(' ')
 
   // The headline: what it ran on, and what it cost in time and plastic.
   const settings = [
@@ -293,7 +292,9 @@ function PrintRow({
     nozzle && `${nozzle} nozzle`,
     print.infillPercent != null && `${print.infillPercent}% infill`,
     print.durationMin != null && formatDuration(print.durationMin),
-    print.filamentUsedG != null && formatGrams(print.filamentUsedG),
+    print.filamentUsedG != null &&
+      print.filamentUsedG !== usageTotal(usage) &&
+      formatGrams(print.filamentUsedG),
   ].filter(Boolean) as string[]
 
   /*
@@ -306,7 +307,7 @@ function PrintRow({
     print.supports != null && (print.supports ? 'supports' : 'no supports'),
     print.adhesion && BED_ADHESION_LABELS[print.adhesion].toLowerCase(),
     print.nozzleTempC != null && `${print.nozzleTempC}/${print.bedTempC ?? '-'} °C`,
-    print.colorName,
+    !usage.length && print.colorName,
     print.filamentCost != null && `costs ${print.filamentCost.toFixed(2)}`,
     print.slicerProfile,
     [print.slicerName, print.slicerVersion].filter(Boolean).join(' '),
@@ -317,7 +318,7 @@ function PrintRow({
       <Icon
         className={cn(
           'mt-0.5 size-4 shrink-0',
-          meta.class,
+          meta.textClass,
           print.status === 'in_progress' && 'animate-spin',
         )}
         aria-hidden
@@ -330,20 +331,18 @@ function PrintRow({
             {formatDate(print.startedAt ?? print.createdAt)}
           </span>
           {print.rating != null && <Rating value={print.rating} />}
-          {print.colorHex && (
-            <span
-              className="size-3 rounded-full ring-1 ring-inset ring-[var(--color-border)]"
-              style={{ backgroundColor: print.colorHex }}
-              title={print.colorHex}
-            />
-          )}
+          {print.colorHex && <Swatch color={print.colorHex} title={print.colorHex} />}
         </div>
 
         {settings.length > 0 && (
-          <p className="mt-0.5 text-xs text-[var(--color-ink-muted)]">{settings.join(' · ')}</p>
+          <p className="mt-0.5 text-xs text-[var(--color-ink-muted)]">
+            <Facts items={settings} />
+          </p>
         )}
         {detail.length > 0 && (
-          <p className="mt-0.5 text-xs text-[var(--color-ink-faint)]">{detail.join(' · ')}</p>
+          <p className="mt-0.5 text-xs text-[var(--color-ink-faint)]">
+            <Facts items={detail} />
+          </p>
         )}
         {print.filamentUsage.length > 0 && (
           <ul className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs">
@@ -353,10 +352,7 @@ function PrintRow({
                   href={`/filaments/${row.spoolId}`}
                   className="text-[var(--color-accent)] hover:underline"
                 >
-                  {[row.snapshot.spoolLabel, row.snapshot.name, row.snapshot.colorName]
-                    .filter(Boolean)
-                    .join(' · ')}
-                  : {row.grams} g
+                  {usageLabel(row.snapshot)}: {formatGrams(row.grams)}
                 </Link>
               </li>
             ))}
@@ -393,7 +389,13 @@ function PrintRow({
           <Button variant="ghost" size="icon" onClick={onEdit} aria-label="Edit this print">
             <Pencil />
           </Button>
-          <Button variant="ghost" size="icon" onClick={onDelete} aria-label="Delete this print">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="hover:text-[var(--color-danger)]"
+            onClick={onDelete}
+            aria-label="Delete this print"
+          >
             <Trash2 />
           </Button>
         </div>
@@ -620,7 +622,7 @@ function PrintForm({
       {spoolInventory && (
         <div className="space-y-3 rounded-[var(--radius-control)] border border-[var(--color-border)] p-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <h3 className="text-sm font-medium">Spools used</h3>
+            <h3 className="text-sm font-semibold">Spools used</h3>
             <Button
               type="button"
               size="sm"
@@ -702,11 +704,7 @@ function PrintForm({
                 Total: {usageTotal} g · Estimated cost: {automaticCost || 'unknown'}
               </p>
               <label className="flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  checked={manualCost}
-                  onChange={(e) => setManualCost(e.target.checked)}
-                />
+                <Checkbox checked={manualCost} onChange={(e) => setManualCost(e.target.checked)} />
                 Override total cost
               </label>
               {manualCost && (
@@ -733,7 +731,7 @@ function PrintForm({
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         <Field label="Outcome" htmlFor="print-status">
           <Select value={status} onChange={(e) => setStatus(e.target.value as PrintStatus)}>
-            <option value="success">Success</option>
+            <option value="success">Printed</option>
             <option value="partial">Partial (usable, with problems)</option>
             <option value="failed">Failed</option>
             <option value="in_progress">Still printing</option>
@@ -801,7 +799,7 @@ function PrintForm({
             <input
               type="color"
               aria-label="Filament colour"
-              value={colorHex || '#4a5568'}
+              value={colorHex || DEFAULT_SWATCH}
               onChange={(e) => setColorHex(e.target.value)}
               className="h-10 w-12 shrink-0 cursor-pointer rounded-[var(--radius-control)] border border-[var(--color-border)] bg-[var(--color-surface)] p-1"
             />
@@ -809,7 +807,7 @@ function PrintForm({
               id="print-colour"
               value={colorHex}
               onChange={(e) => setColorHex(e.target.value)}
-              placeholder="#1a2b3c"
+              placeholder={DEFAULT_SWATCH}
             />
           </div>
           <p className="text-xs text-[var(--color-ink-faint)]">Optional</p>
@@ -1073,25 +1071,24 @@ function PrintForm({
       </details>
 
       <Field label="Notes" htmlFor="print-notes" hint="Anything worth knowing next time">
-        <textarea
+        <Textarea
           id="print-notes"
           value={notes}
           onChange={(e) => setNotes(e.target.value)}
           rows={3}
           placeholder="Brim helped with warping. Slowed the first layer to 20 mm/s."
-          className="w-full rounded-[var(--radius-control)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-ink)] placeholder:text-[var(--color-ink-faint)] focus:border-[var(--color-accent)]"
         />
       </Field>
 
       {error && <p className="text-sm text-[var(--color-danger)]">{error}</p>}
 
-      <div className="flex gap-2">
-        <Button type="submit" size="sm" disabled={pending}>
+      <div className="flex justify-end gap-2">
+        <Button type="button" variant="ghost" onClick={onCancel} disabled={pending}>
+          Cancel
+        </Button>
+        <Button type="submit" disabled={pending}>
           {pending && <Loader2 className="animate-spin" />}
           {initial ? 'Save changes' : 'Log print'}
-        </Button>
-        <Button type="button" variant="ghost" size="sm" onClick={onCancel} disabled={pending}>
-          Cancel
         </Button>
       </div>
     </form>
@@ -1131,23 +1128,4 @@ function toLocalInput(iso: string | null | undefined): string {
   const date = new Date(iso)
   const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000)
   return local.toISOString().slice(0, 16)
-}
-
-function formatDate(iso: string): string {
-  return new Date(iso).toLocaleDateString('en-GB', {
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric',
-  })
-}
-
-export function formatDuration(minutes: number): string {
-  if (minutes < 60) return `${minutes} min`
-  const hours = Math.floor(minutes / 60)
-  const rest = minutes % 60
-  return rest === 0 ? `${hours} h` : `${hours} h ${rest} min`
-}
-
-export function formatGrams(grams: number): string {
-  return grams >= 1000 ? `${(grams / 1000).toFixed(2)} kg` : `${Math.round(grams)} g`
 }

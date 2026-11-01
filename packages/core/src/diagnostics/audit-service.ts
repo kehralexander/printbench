@@ -1,4 +1,4 @@
-import { and, count, desc, eq, gte, ilike, like, lte, or, sql, type SQL } from 'drizzle-orm'
+import { and, asc, count, desc, eq, gte, ilike, like, lte, or, sql, type SQL } from 'drizzle-orm'
 import { schema, type Database } from '@pb/db'
 import { processRole } from './process-role'
 
@@ -201,6 +201,8 @@ export interface AuditFilter {
   to?: Date
   limit?: number
   offset?: number
+  /** Newest first unless asked otherwise. */
+  order?: 'newest' | 'oldest'
 }
 
 export type AuditEvent = typeof schema.auditEvents.$inferSelect
@@ -237,7 +239,11 @@ export async function listAuditEvents(
       .select()
       .from(schema.auditEvents)
       .where(where)
-      .orderBy(desc(schema.auditEvents.occurredAt), desc(schema.auditEvents.id))
+      .orderBy(
+        ...(filter.order === 'oldest'
+          ? [asc(schema.auditEvents.occurredAt), asc(schema.auditEvents.id)]
+          : [desc(schema.auditEvents.occurredAt), desc(schema.auditEvents.id)]),
+      )
       .limit(Math.min(filter.limit ?? 50, 5000))
       .offset(filter.offset ?? 0),
     db.select({ total: count() }).from(schema.auditEvents).where(where),

@@ -2,6 +2,7 @@ import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { ArchiveRestore } from 'lucide-react'
 import { needsFirstRunSetup } from '@/lib/setup'
+import { AuthHeader } from '@/components/auth/auth-header'
 import { RestorePanel } from '@/components/backup/restore-panel'
 import { createFirstRunRestoreTicket } from './actions'
 
@@ -15,17 +16,12 @@ export default async function SetupRestorePage() {
 
   return (
     <>
-      <div className="mb-6">
-        <span className="mb-4 inline-flex items-center gap-1.5 rounded-full bg-[var(--color-accent-soft)] px-2.5 py-1 text-xs font-medium text-[var(--color-accent)]">
-          <ArchiveRestore className="size-3.5" />
-          First run
-        </span>
-        <h1 className="text-2xl font-semibold tracking-tight">Restore from a backup</h1>
-        <p className="mt-1 text-sm text-[var(--color-ink-muted)]">
-          Bring across everything from another PrintBench: accounts, libraries, tags, print history
-          and settings. You then sign in with an account from that instance.
-        </p>
-      </div>
+      <AuthHeader
+        eyebrow="First run"
+        icon={<ArchiveRestore />}
+        title="Restore from a backup"
+        description="Bring across everything from another PrintBench: accounts, libraries, tags, print history and settings. You then sign in with an account from that instance."
+      />
 
       <RestorePanel
         getTicket={createFirstRunRestoreTicket}

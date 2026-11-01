@@ -1,8 +1,8 @@
-import Link from 'next/link'
-import { MailX, UserPlus } from 'lucide-react'
+import { UserPlus } from 'lucide-react'
 import { inviteByToken } from '@pb/core'
 import { getDb } from '@pb/db'
-import { Button } from '@/components/ui/button'
+import { AuthHeader } from '@/components/auth/auth-header'
+import { BackToSignIn } from '@/components/auth/back-to-sign-in'
 import { InviteForm } from './invite-form'
 
 export const dynamic = 'force-dynamic'
@@ -25,35 +25,27 @@ export default async function InvitePage({ params }: { params: Promise<{ token: 
    */
   if (!invitation) {
     return (
-      <div>
-        <span className="mb-4 inline-flex items-center gap-1.5 rounded-full bg-[var(--color-surface-2)] px-2.5 py-1 text-xs font-medium text-[var(--color-ink-muted)]">
-          <MailX className="size-3.5" />
-          Invitation
-        </span>
-        <h1 className="text-2xl font-semibold tracking-tight">This link cannot be used</h1>
-        <p className="mt-1 text-sm text-[var(--color-ink-muted)]">
-          It may have expired, been used already, or been cancelled. Ask whoever invited you for a
-          fresh one.
-        </p>
-        <Button asChild variant="secondary" className="mt-6">
-          <Link href="/login">Go to sign in</Link>
-        </Button>
-      </div>
+      <>
+        <AuthHeader
+          // The same badge as a working invitation: the title says what changed.
+          eyebrow="Invitation"
+          icon={<UserPlus />}
+          title="This link cannot be used"
+          description="It may have expired, been used already, or been cancelled. Ask whoever invited you for a fresh one."
+        />
+        <BackToSignIn />
+      </>
     )
   }
 
   return (
     <>
-      <div className="mb-6">
-        <span className="mb-4 inline-flex items-center gap-1.5 rounded-full bg-[var(--color-accent-soft)] px-2.5 py-1 text-xs font-medium text-[var(--color-accent)]">
-          <UserPlus className="size-3.5" />
-          Invitation
-        </span>
-        <h1 className="text-2xl font-semibold tracking-tight">Set up your account</h1>
-        <p className="mt-1 text-sm text-[var(--color-ink-muted)]">
-          {ROLE_BLURB[invitation.role] ?? 'Choose a password and you are in.'}
-        </p>
-      </div>
+      <AuthHeader
+        eyebrow="Invitation"
+        icon={<UserPlus />}
+        title="Set up your account"
+        description={ROLE_BLURB[invitation.role] ?? 'Choose a password and you are in.'}
+      />
       <InviteForm token={token} email={invitation.email} />
     </>
   )

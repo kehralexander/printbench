@@ -2,15 +2,34 @@
 
 import { useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
-import { AlertTriangle, RefreshCw } from 'lucide-react'
+import { AlertTriangle, History, MoreHorizontal, RefreshCw, ScanSearch, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { triggerScan } from './actions'
+import { DeleteLibraryDialog } from './delete-library-dialog'
 
-export function ScanButton({
+/**
+ * A library card's actions: the everyday scan as a button, and the rarer ones
+ * — a deep scan, restoring from sidecars, removing the library — in a "More"
+ * menu, the same split the model and spool pages use.
+ */
+export function LibraryActions({
   libraryId,
+  name,
+  modelCount,
+  writesSidecars,
   needsConfirmation,
 }: {
   libraryId: string
+  name: string
+  modelCount: number
+  writesSidecars: boolean
   needsConfirmation?: boolean
 }) {
   const router = useRouter()
@@ -18,6 +37,50 @@ export function ScanButton({
   const [message, setMessage] = useState<string | null>(null)
   const [confirming, setConfirming] = useState(false)
   const [confirmingRestore, setConfirmingRestore] = useState(false)
+  const [removing, setRemoving] = useState(false)
+
+  const removeDialog = (
+    <DeleteLibraryDialog
+      libraryId={libraryId}
+      name={name}
+      modelCount={modelCount}
+      writesSidecars={writesSidecars}
+      open={removing}
+      onOpenChange={setRemoving}
+    />
+  )
+
+  function moreMenu(scans: boolean) {
+    return (
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="ghost" size="sm" aria-label={`More actions for ${name}`}>
+            <MoreHorizontal />
+            <span className="hidden sm:inline">More</span>
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent>
+          {scans && (
+            <>
+              <DropdownMenuItem disabled={pending} onSelect={() => run({ mode: 'deep' })}>
+                <ScanSearch />
+                Deep scan
+              </DropdownMenuItem>
+              <DropdownMenuItem disabled={pending} onSelect={() => setConfirmingRestore(true)}>
+                <History />
+                Restore from sidecars…
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+            </>
+          )}
+          <DropdownMenuItem tone="danger" onSelect={() => setRemoving(true)}>
+            <Trash2 />
+            Remove library…
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    )
+  }
 
   function run(
     options: {
@@ -76,8 +139,10 @@ export function ScanButton({
               <AlertTriangle />
               Confirm deletion
             </Button>
+            {moreMenu(false)}
           </>
         )}
+        {removeDialog}
         {message && <span className="text-xs text-[var(--color-ink-faint)]">{message}</span>}
       </div>
     )
@@ -122,26 +187,10 @@ export function ScanButton({
             <RefreshCw className={pending ? 'animate-spin' : undefined} />
             Scan
           </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            disabled={pending}
-            title="Re-examines every file. Slower, but catches edits to existing files."
-            onClick={() => run({ mode: 'deep' })}
-          >
-            Deep scan
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            disabled={pending}
-            title="Restore model and package metadata from on-disk sidecar files."
-            onClick={() => setConfirmingRestore(true)}
-          >
-            Restore sidecars
-          </Button>
+          {moreMenu(true)}
         </div>
       )}
+      {removeDialog}
       {message && <span className="text-xs text-[var(--color-ink-faint)]">{message}</span>}
     </div>
   )

@@ -1,8 +1,12 @@
 import Link from 'next/link'
-import { CheckCircle2, CircleDashed, Loader2, XCircle } from 'lucide-react'
 import type { FilamentUsage, PrintStatus } from '@pb/core'
 import { NOZZLE_TYPE_LABELS, type NozzleType } from '@pb/core/prints'
 import { cn } from '@/lib/cn'
+import { Facts } from '@/components/ui/facts'
+import { formatDate, formatDuration, formatGrams } from '@/lib/format'
+import { PRINT_OUTCOME } from '@/lib/print-outcome'
+import { usageLabel, usageTotal } from '@/lib/filament-usage'
+import { Swatch } from '@/components/ui/swatch'
 
 /**
  * The library-wide print log.
@@ -37,21 +41,11 @@ export interface TimelinePrint {
   at: string
 }
 
-const STATUS_META: Record<
-  PrintStatus,
-  { label: string; icon: typeof CheckCircle2; class: string }
-> = {
-  success: { label: 'Success', icon: CheckCircle2, class: 'text-[var(--color-success)]' },
-  failed: { label: 'Failed', icon: XCircle, class: 'text-[var(--color-danger)]' },
-  partial: { label: 'Partial', icon: CircleDashed, class: 'text-[var(--color-warning)]' },
-  in_progress: { label: 'Printing', icon: Loader2, class: 'text-[var(--color-accent)]' },
-}
-
 export function PrintTimeline({ prints }: { prints: TimelinePrint[] }) {
   return (
     <ol className="divide-y divide-[var(--color-border)]">
       {prints.map((print) => {
-        const meta = STATUS_META[print.status]
+        const meta = PRINT_OUTCOME[print.status]
         const Icon = meta.icon
 
         // Same shape as the per-model row, so the two lists read alike.
@@ -66,10 +60,7 @@ export function PrintTimeline({ prints }: { prints: TimelinePrint[] }) {
           print.printerName,
           print.filamentUsage.length
             ? print.filamentUsage
-                .map(
-                  (row) =>
-                    `${row.snapshot.name}${row.snapshot.colorName ? ' ' + row.snapshot.colorName : ''}: ${row.grams} g`,
-                )
+                .map((row) => `${usageLabel(row.snapshot)}: ${formatGrams(row.grams)}`)
                 .join(' · ')
             : [print.filamentBrand, print.material].filter(Boolean).join(' '),
           print.layerHeightMm != null && `${print.layerHeightMm} mm layers`,
@@ -77,7 +68,10 @@ export function PrintTimeline({ prints }: { prints: TimelinePrint[] }) {
           print.infillPercent != null && `${print.infillPercent}% infill`,
           print.slicerProfile,
           print.durationMin != null && formatDuration(print.durationMin),
-          print.filamentUsedG != null && formatGrams(print.filamentUsedG),
+          // The per-spool grams above already add up to it.
+          print.filamentUsedG != null &&
+            print.filamentUsedG !== usageTotal(print.filamentUsage) &&
+            formatGrams(print.filamentUsedG),
         ].filter(Boolean) as string[]
 
         return (
@@ -86,7 +80,7 @@ export function PrintTimeline({ prints }: { prints: TimelinePrint[] }) {
               aria-hidden
               className={cn(
                 'mt-0.5 size-4 shrink-0',
-                meta.class,
+                meta.textClass,
                 print.status === 'in_progress' && 'animate-spin',
               )}
             />
@@ -108,18 +102,12 @@ export function PrintTimeline({ prints }: { prints: TimelinePrint[] }) {
                     {'★'.repeat(print.rating)}
                   </span>
                 )}
-                {print.colorHex && (
-                  <span
-                    title={print.colorHex}
-                    className="size-3 rounded-full ring-1 ring-inset ring-[var(--color-border)]"
-                    style={{ backgroundColor: print.colorHex }}
-                  />
-                )}
+                {print.colorHex && <Swatch color={print.colorHex} title={print.colorHex} />}
               </div>
 
               {settings.length > 0 && (
                 <p className="mt-0.5 text-xs text-[var(--color-ink-muted)]">
-                  {settings.join(' · ')}
+                  <Facts items={settings} />
                 </p>
               )}
               {print.notes && (
@@ -152,23 +140,4 @@ export function PrintTimeline({ prints }: { prints: TimelinePrint[] }) {
       })}
     </ol>
   )
-}
-
-function formatDate(iso: string): string {
-  return new Date(iso).toLocaleDateString('en-GB', {
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric',
-  })
-}
-
-function formatDuration(minutes: number): string {
-  if (minutes < 60) return `${minutes} min`
-  const hours = Math.floor(minutes / 60)
-  const rest = minutes % 60
-  return rest === 0 ? `${hours} h` : `${hours} h ${rest} min`
-}
-
-function formatGrams(grams: number): string {
-  return grams >= 1000 ? `${(grams / 1000).toFixed(2)} kg` : `${Math.round(grams)} g`
 }

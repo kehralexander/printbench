@@ -4,6 +4,7 @@ import { useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import {
   AlertTriangle,
+  KeyRound,
   Loader2,
   MoreHorizontal,
   Pencil,
@@ -16,19 +17,21 @@ import { Input } from '@/components/ui/input'
 import { Field } from '@/components/ui/field'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { deleteUser, setSuspended, updateUser } from './actions'
+import { PasswordResetPanel } from './password-reset-panel'
 
 /**
  * Everything you can do to one account, behind one control.
  *
- * Editing, suspending and deleting share a row and a confirmation pattern, so
- * they share a panel rather than crowding the table with three buttons each.
+ * Editing, resetting a password, suspending and deleting share a row and a
+ * confirmation pattern, so they share a panel rather than crowding the table
+ * with a button each.
  *
  * None of these appear for your own account. Suspending or deleting yourself
  * is a lockout with no way back through the UI, and the server refuses it
  * anyway — this just avoids offering an action that cannot work.
  */
 
-type Mode = 'menu' | 'edit' | 'confirm-delete'
+type Mode = 'menu' | 'edit' | 'reset' | 'confirm-delete'
 
 export function UserActions({
   userId,
@@ -83,12 +86,29 @@ export function UserActions({
         {mode === 'menu' && (
           <>
             <div>
-              <Button variant="secondary" size="sm" onClick={() => setMode('edit')}>
+              <Button variant="ghost" size="sm" onClick={() => setMode('edit')}>
                 <Pencil />
                 Edit details
               </Button>
               <p className="mt-1.5 text-xs text-[var(--color-ink-muted)]">
                 Change their name or the email they sign in with.
+              </p>
+            </div>
+
+            <div className="border-t border-[var(--color-border)] pt-3">
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={suspended}
+                onClick={() => setMode('reset')}
+              >
+                <KeyRound />
+                Reset password
+              </Button>
+              <p className="mt-1.5 text-xs text-[var(--color-ink-muted)]">
+                {suspended
+                  ? 'Restore access before resetting their password.'
+                  : 'Creates a single-use link for them to choose a new password.'}
               </p>
             </div>
 
@@ -166,6 +186,10 @@ export function UserActions({
               </Button>
             </div>
           </>
+        )}
+
+        {mode === 'reset' && (
+          <PasswordResetPanel userId={userId} email={email} onBack={() => setMode('menu')} />
         )}
 
         {mode === 'confirm-delete' && (

@@ -3,11 +3,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Check, Loader2, Pencil, Plus, X } from 'lucide-react'
-import * as Dialog from '@radix-ui/react-dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { Field } from '@/components/ui/field'
+import { Textarea } from '@/components/ui/textarea'
+import { Dialog, DialogClose, DialogContent, DialogTrigger } from '@/components/ui/dialog'
 import { cn } from '@/lib/cn'
 import { loadSuggestions, saveModel } from './edit-actions'
 
@@ -158,341 +159,331 @@ export function ModelEditor({ publicId, initial, canEdit }: ModelEditorProps) {
     .slice(0, 10)
 
   return (
-    <Dialog.Root
+    <Dialog
       open={open}
       onOpenChange={(nextOpen) => {
         if (!nextOpen && saving) return
         setOpen(nextOpen)
       }}
     >
-      <Dialog.Trigger asChild>
+      <DialogTrigger asChild>
         <Button variant="secondary" size="sm">
           <Pencil />
           Edit
         </Button>
-      </Dialog.Trigger>
+      </DialogTrigger>
 
-      <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-50 bg-black/50" />
+      <DialogContent
+        title="Edit model"
+        description="Name, notes, creator, licence, links and tags."
+        size="lg"
+        hideClose={saving}
+        onEscapeKeyDown={(event) => {
+          if (saving) event.preventDefault()
+        }}
+        onPointerDownOutside={(event) => {
+          if (saving) event.preventDefault()
+        }}
+      >
+        <div className="space-y-4">
+          <Field label="Name" htmlFor="model-name">
+            <Input value={name} onChange={(event) => setName(event.target.value)} />
+          </Field>
 
-        <Dialog.Content
-          className="fixed left-1/2 top-1/2 z-50 max-h-[90vh] w-[calc(100%-2rem)] max-w-4xl -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface)] p-5 shadow-xl"
-          onEscapeKeyDown={(event) => {
-            if (saving) event.preventDefault()
-          }}
-          onPointerDownOutside={(event) => {
-            if (saving) event.preventDefault()
-          }}
-        >
-          <Dialog.Title className="sr-only">Edit model</Dialog.Title>
-          <Dialog.Description className="sr-only">Edit this model's metadata.</Dialog.Description>
+          <Field label="Notes" htmlFor="model-notes">
+            <Textarea
+              id="model-notes"
+              value={notes}
+              onChange={(event) => setNotes(event.target.value)}
+              rows={4}
+            />
+          </Field>
 
-          <div className="space-y-4">
-            <Field label="Name" htmlFor="model-name">
-              <Input value={name} onChange={(event) => setName(event.target.value)} />
-            </Field>
-
-            <Field label="Notes" htmlFor="model-notes">
-              <textarea
-                id="model-notes"
-                value={notes}
-                onChange={(event) => setNotes(event.target.value)}
-                rows={4}
-                className="w-full rounded-[var(--radius-control)] border border-[var(--color-border)] bg-[var(--color-surface)] p-2 text-sm focus:border-[var(--color-accent)]"
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="Creator" htmlFor="model-creator" hint="Created if it does not exist yet.">
+              <Input
+                value={creator}
+                list="creator-suggestions"
+                onChange={(event) => setCreator(event.target.value)}
               />
             </Field>
-
-            <div className="grid gap-4 sm:grid-cols-2">
-              <Field
-                label="Creator"
-                htmlFor="model-creator"
-                hint="Created if it does not exist yet."
-              >
-                <Input
-                  value={creator}
-                  list="creator-suggestions"
-                  onChange={(event) => setCreator(event.target.value)}
-                />
-              </Field>
-              <datalist id="creator-suggestions">
-                {suggestions.creators.map((option) => (
-                  <option key={option} value={option} />
-                ))}
-              </datalist>
-
-              <Field
-                label="Licence"
-                htmlFor="model-license"
-                hint="Pick a standard identifier so licences group together."
-              >
-                <Input
-                  value={license}
-                  list="license-suggestions"
-                  onChange={(event) => setLicense(event.target.value)}
-                />
-              </Field>
-              <datalist id="license-suggestions">
-                {LICENCES.map((option) => (
-                  <option key={option} value={option} />
-                ))}
-              </datalist>
-            </div>
+            <datalist id="creator-suggestions">
+              {suggestions.creators.map((option) => (
+                <option key={option} value={option} />
+              ))}
+            </datalist>
 
             <Field
-              label="Licence URL"
-              htmlFor="model-license-url"
-              hint="Link to the licence terms or commercial subscription page."
+              label="Licence"
+              htmlFor="model-license"
+              hint="Pick a standard identifier so licences group together."
             >
               <Input
-                id="model-license-url"
-                type="url"
-                value={licenseUrl}
-                placeholder="https://..."
-                onChange={(event) => setLicenseUrl(event.target.value)}
+                value={license}
+                list="license-suggestions"
+                onChange={(event) => setLicense(event.target.value)}
               />
             </Field>
+            <datalist id="license-suggestions">
+              {LICENCES.map((option) => (
+                <option key={option} value={option} />
+              ))}
+            </datalist>
+          </div>
 
-            <div className="grid gap-4 sm:grid-cols-2">
-              <Field label="Commercial use" htmlFor="model-commercial-use">
-                <Select
-                  id="model-commercial-use"
-                  value={commercialUse}
-                  onChange={(event) =>
-                    setCommercialUse(event.target.value as 'unknown' | 'yes' | 'no')
-                  }
-                >
-                  <option value="unknown">Not recorded</option>
-                  <option value="yes">Licensed for commercial use</option>
-                  <option value="no">Commercial use not permitted</option>
-                </Select>
-              </Field>
+          <Field
+            label="Licence URL"
+            htmlFor="model-license-url"
+            hint="Link to the licence terms or commercial subscription page."
+          >
+            <Input
+              id="model-license-url"
+              type="url"
+              value={licenseUrl}
+              placeholder="https://..."
+              onChange={(event) => setLicenseUrl(event.target.value)}
+            />
+          </Field>
 
-              <Field
-                label="Licence expiry"
-                htmlFor="model-license-expiry"
-                hint="Leave blank if the licence does not expire."
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="Commercial use" htmlFor="model-commercial-use">
+              <Select
+                id="model-commercial-use"
+                value={commercialUse}
+                onChange={(event) =>
+                  setCommercialUse(event.target.value as 'unknown' | 'yes' | 'no')
+                }
               >
-                <Input
-                  id="model-license-expiry"
-                  type="date"
-                  value={licenseExpiresAt}
-                  onChange={(event) => setLicenseExpiresAt(event.target.value)}
-                />
-              </Field>
-            </div>
+                <option value="unknown">Not recorded</option>
+                <option value="yes">Licensed for commercial use</option>
+                <option value="no">Commercial use not permitted</option>
+              </Select>
+            </Field>
 
             <Field
-              label="Licence notes"
-              htmlFor="model-license-notes"
-              hint="Attribution, modification restrictions, or other important terms."
+              label="Licence expiry"
+              htmlFor="model-license-expiry"
+              hint="Leave blank if the licence does not expire."
             >
-              <textarea
-                id="model-license-notes"
-                value={licenseNotes}
-                onChange={(event) => setLicenseNotes(event.target.value)}
-                rows={3}
-                className="w-full rounded-[var(--radius-control)] border border-[var(--color-border)] bg-[var(--color-surface)] p-2 text-sm focus:border-[var(--color-accent)]"
+              <Input
+                id="model-license-expiry"
+                type="date"
+                value={licenseExpiresAt}
+                onChange={(event) => setLicenseExpiresAt(event.target.value)}
               />
             </Field>
+          </div>
 
-            <div className="space-y-2 border-y-2 border-[var(--color-border)] py-4">
-              <div>
-                <span className="block text-sm font-medium">Links</span>
-                <span className="text-xs text-[var(--color-text-muted)]">
-                  Add source pages, videos, instructions, designer pages, or other useful links.
-                </span>
-              </div>
+          <Field
+            label="Licence notes"
+            htmlFor="model-license-notes"
+            hint="Attribution, modification restrictions, or other important terms."
+          >
+            <Textarea
+              id="model-license-notes"
+              value={licenseNotes}
+              onChange={(event) => setLicenseNotes(event.target.value)}
+              rows={3}
+            />
+          </Field>
 
-              <div className="divide-y divide-[var(--color-border)]">
-                {links.map((link, index) => {
-                  const knownType = LINK_TYPES.includes(link.title as (typeof LINK_TYPES)[number])
-                  const selectedType = knownType ? link.title : 'Other'
+          <div className="space-y-2 border-y-2 border-[var(--color-border)] py-4">
+            <div>
+              <span className="block text-sm font-medium">Links</span>
+              <span className="text-xs text-[var(--color-ink-muted)]">
+                Add source pages, videos, instructions, designer pages, or other useful links.
+              </span>
+            </div>
 
-                  return (
-                    <div key={index} className="py-2 first:pt-0">
-                      <div
-                        className={cn(
-                          'grid gap-2',
-                          knownType
-                            ? 'sm:grid-cols-[190px_1fr_auto]'
-                            : 'sm:grid-cols-[190px_200px_1fr_auto]',
-                        )}
+            <div className="divide-y divide-[var(--color-border)]">
+              {links.map((link, index) => {
+                const knownType = LINK_TYPES.includes(link.title as (typeof LINK_TYPES)[number])
+                const selectedType = knownType ? link.title : 'Other'
+
+                return (
+                  <div key={index} className="py-2 first:pt-0">
+                    <div
+                      className={cn(
+                        'grid gap-2',
+                        knownType
+                          ? 'sm:grid-cols-[190px_1fr_auto]'
+                          : 'sm:grid-cols-[190px_200px_1fr_auto]',
+                      )}
+                    >
+                      <Select
+                        id={`model-link-type-${index}`}
+                        aria-label={`Link ${index + 1} type`}
+                        value={selectedType}
+                        onChange={(event) => {
+                          const value = event.target.value
+                          setLinks((current) =>
+                            current.map((item, itemIndex) =>
+                              itemIndex === index
+                                ? {
+                                    ...item,
+                                    title: value === 'Other' ? '' : value,
+                                  }
+                                : item,
+                            ),
+                          )
+                        }}
                       >
-                        <Select
-                          id={`model-link-type-${index}`}
-                          aria-label={`Link ${index + 1} type`}
-                          value={selectedType}
-                          onChange={(event) => {
-                            const value = event.target.value
-                            setLinks((current) =>
-                              current.map((item, itemIndex) =>
-                                itemIndex === index
-                                  ? {
-                                      ...item,
-                                      title: value === 'Other' ? '' : value,
-                                    }
-                                  : item,
-                              ),
-                            )
-                          }}
-                        >
-                          {LINK_TYPES.map((type) => {
-                            const usedByAnotherLink = links.some(
-                              (item, itemIndex) => itemIndex !== index && item.title === type,
-                            )
+                        {LINK_TYPES.map((type) => {
+                          const usedByAnotherLink = links.some(
+                            (item, itemIndex) => itemIndex !== index && item.title === type,
+                          )
 
-                            return (
-                              <option key={type} value={type} disabled={usedByAnotherLink}>
-                                {type}
-                              </option>
-                            )
-                          })}
-                          <option value="Other">Other</option>
-                        </Select>
+                          return (
+                            <option key={type} value={type} disabled={usedByAnotherLink}>
+                              {type}
+                            </option>
+                          )
+                        })}
+                        <option value="Other">Other</option>
+                      </Select>
 
-                        {!knownType && (
-                          <Input
-                            id={`model-link-title-${index}`}
-                            aria-label={`Link ${index + 1} title`}
-                            value={link.title}
-                            placeholder="Link title"
-                            maxLength={300}
-                            onChange={(event) => {
-                              const value = event.target.value
-                              setLinks((current) =>
-                                current.map((item, itemIndex) =>
-                                  itemIndex === index ? { ...item, title: value } : item,
-                                ),
-                              )
-                            }}
-                          />
-                        )}
-
+                      {!knownType && (
                         <Input
-                          id={`model-link-url-${index}`}
-                          type="url"
-                          aria-label={`Link ${index + 1} URL`}
-                          value={link.url}
-                          placeholder="https://..."
-                          maxLength={2000}
+                          id={`model-link-title-${index}`}
+                          aria-label={`Link ${index + 1} title`}
+                          value={link.title}
+                          placeholder="Link title"
+                          maxLength={300}
                           onChange={(event) => {
                             const value = event.target.value
                             setLinks((current) =>
                               current.map((item, itemIndex) =>
-                                itemIndex === index ? { ...item, url: value } : item,
+                                itemIndex === index ? { ...item, title: value } : item,
                               ),
                             )
                           }}
                         />
+                      )}
 
-                        <Button
-                          type="button"
-                          variant="secondary"
-                          size="sm"
-                          aria-label="Remove link"
-                          onClick={() =>
-                            setLinks((current) =>
-                              current.filter((_, itemIndex) => itemIndex !== index),
-                            )
-                          }
-                        >
-                          <X />
-                        </Button>
-                      </div>
+                      <Input
+                        id={`model-link-url-${index}`}
+                        type="url"
+                        aria-label={`Link ${index + 1} URL`}
+                        value={link.url}
+                        placeholder="https://..."
+                        maxLength={2000}
+                        onChange={(event) => {
+                          const value = event.target.value
+                          setLinks((current) =>
+                            current.map((item, itemIndex) =>
+                              itemIndex === index ? { ...item, url: value } : item,
+                            ),
+                          )
+                        }}
+                      />
+
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        aria-label="Remove link"
+                        onClick={() =>
+                          setLinks((current) =>
+                            current.filter((_, itemIndex) => itemIndex !== index),
+                          )
+                        }
+                      >
+                        <X />
+                      </Button>
                     </div>
-                  )
-                })}
-              </div>
-
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                disabled={links.length >= 50}
-                onClick={() => setLinks((current) => [...current, { title: '', url: '' }])}
-              >
-                <Plus />
-                Add link
-              </Button>
+                  </div>
+                )
+              })}
             </div>
 
-            <div className="space-y-1.5">
-              <span className="block text-sm font-medium">Tags</span>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              disabled={links.length >= 50}
+              onClick={() => setLinks((current) => [...current, { title: '', url: '' }])}
+            >
+              <Plus />
+              Add link
+            </Button>
+          </div>
 
-              <div className="flex flex-wrap gap-1.5">
-                {tags.map((tag) => (
-                  <span
-                    key={tag}
-                    className="inline-flex items-center gap-1 rounded-full bg-[var(--color-accent-soft)] py-0.5 pl-2.5 pr-1 text-xs font-medium text-[var(--color-accent)]"
+          <div className="space-y-1.5">
+            <span className="block text-sm font-medium">Tags</span>
+
+            <div className="flex flex-wrap gap-1.5">
+              {tags.map((tag) => (
+                <span
+                  key={tag}
+                  className="inline-flex items-center gap-1 rounded-full bg-[var(--color-accent-soft)] py-0.5 pl-2.5 pr-1 text-xs font-medium text-[var(--color-accent)]"
+                >
+                  {tag}
+                  <button
+                    type="button"
+                    aria-label={`Remove tag ${tag}`}
+                    onClick={() => setTags((current) => current.filter((item) => item !== tag))}
+                    className="rounded-full p-0.5 hover:bg-[var(--color-accent)]/15"
                   >
+                    <X className="size-3" />
+                  </button>
+                </span>
+              ))}
+            </div>
+
+            <Input
+              value={tagDraft}
+              placeholder="Add a tag and press Enter"
+              onChange={(event) => setTagDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ',') {
+                  event.preventDefault()
+                  addTag(tagDraft)
+                } else if (event.key === 'Backspace' && tagDraft === '') {
+                  setTags((current) => current.slice(0, -1))
+                }
+              }}
+            />
+
+            {unusedTagSuggestions.length > 0 && (
+              <div className="flex flex-wrap gap-1 pt-1">
+                {unusedTagSuggestions.map((tag) => (
+                  <button
+                    key={tag}
+                    type="button"
+                    onClick={() => addTag(tag)}
+                    className={cn(
+                      'inline-flex items-center gap-0.5 rounded-full border border-[var(--color-border)] px-2 py-0.5',
+                      'text-xs text-[var(--color-ink-muted)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]',
+                    )}
+                  >
+                    <Plus className="size-2.5" />
                     {tag}
-                    <button
-                      type="button"
-                      aria-label={`Remove tag ${tag}`}
-                      onClick={() => setTags((current) => current.filter((item) => item !== tag))}
-                      className="rounded-full p-0.5 hover:bg-[var(--color-accent)]/15"
-                    >
-                      <X className="size-3" />
-                    </button>
-                  </span>
+                  </button>
                 ))}
               </div>
-
-              <Input
-                value={tagDraft}
-                placeholder="Add a tag and press Enter"
-                onChange={(event) => setTagDraft(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' || event.key === ',') {
-                    event.preventDefault()
-                    addTag(tagDraft)
-                  } else if (event.key === 'Backspace' && tagDraft === '') {
-                    setTags((current) => current.slice(0, -1))
-                  }
-                }}
-              />
-
-              {unusedTagSuggestions.length > 0 && (
-                <div className="flex flex-wrap gap-1 pt-1">
-                  {unusedTagSuggestions.map((tag) => (
-                    <button
-                      key={tag}
-                      type="button"
-                      onClick={() => addTag(tag)}
-                      className={cn(
-                        'inline-flex items-center gap-0.5 rounded-full border border-[var(--color-border)] px-2 py-0.5',
-                        'text-xs text-[var(--color-ink-muted)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]',
-                      )}
-                    >
-                      <Plus className="size-2.5" />
-                      {tag}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {error && (
-              <p role="alert" className="text-sm text-[var(--color-danger)]">
-                {error}
-              </p>
             )}
-            {note && <p className="text-sm text-[var(--color-ink-muted)]">{note}</p>}
-
-            <div className="flex justify-end gap-2">
-              <Dialog.Close asChild>
-                <Button variant="ghost" size="sm" disabled={saving}>
-                  Cancel
-                </Button>
-              </Dialog.Close>
-              <Button size="sm" onClick={() => void save()} disabled={saving || name.trim() === ''}>
-                {saving ? <Loader2 className="animate-spin" /> : <Check />}
-                Save
-              </Button>
-            </div>
           </div>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+
+          {error && (
+            <p role="alert" className="text-sm text-[var(--color-danger)]">
+              {error}
+            </p>
+          )}
+          {note && <p className="text-sm text-[var(--color-ink-muted)]">{note}</p>}
+
+          <div className="flex justify-end gap-2">
+            <DialogClose asChild>
+              <Button variant="ghost" size="sm" disabled={saving}>
+                Cancel
+              </Button>
+            </DialogClose>
+            <Button size="sm" onClick={() => void save()} disabled={saving || name.trim() === ''}>
+              {saving ? <Loader2 className="animate-spin" /> : <Check />}
+              Save
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
   )
 }

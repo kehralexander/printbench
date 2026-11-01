@@ -4,6 +4,9 @@ import { useState, useTransition } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Field } from '@/components/ui/field'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { NewPasswordFields } from '@/components/auth/new-password-fields'
+import { MAX_PASSWORD } from '@/lib/password'
 import { changeOwnPassword } from './password-actions'
 
 export function PasswordForm({ email }: { email: string }) {
@@ -16,10 +19,6 @@ export function PasswordForm({ email }: { email: string }) {
     const data = new FormData(form)
     const currentPassword = String(data.get('currentPassword') ?? '')
     const newPassword = String(data.get('newPassword') ?? '')
-    if (newPassword !== String(data.get('confirmPassword') ?? '')) {
-      setMessage('The new passwords do not match.')
-      return
-    }
     setMessage('')
     startTransition(async () => {
       try {
@@ -37,60 +36,35 @@ export function PasswordForm({ email }: { email: string }) {
   }
 
   return (
-    <section
-      id="password"
-      aria-labelledby="password-heading"
-      className="space-y-4 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface)] p-6"
-    >
-      <div>
-        <h2 id="password-heading" className="text-lg font-semibold">
-          Password
-        </h2>
-        <p className="mt-1 text-sm text-[var(--color-ink-muted)]">
+    <Card id="password" role="region" aria-labelledby="password-heading">
+      <CardHeader>
+        <CardTitle id="password-heading">Password</CardTitle>
+        <CardDescription>
           Signed in as {email}. Changing your password signs out your other sessions.
-        </p>
-      </div>
-      <form onSubmit={submit} className="space-y-3">
-        <input type="hidden" name="username" value={email} autoComplete="username" />
-        <Field label="Current password" htmlFor="currentPassword">
-          <Input
-            name="currentPassword"
-            type="password"
-            autoComplete="current-password"
-            required
-            maxLength={200}
-            disabled={pending}
-          />
-        </Field>
-        <Field label="New password" htmlFor="newPassword" hint="Between 10 and 200 characters.">
-          <Input
-            name="newPassword"
-            type="password"
-            autoComplete="new-password"
-            required
-            minLength={10}
-            maxLength={200}
-            disabled={pending}
-          />
-        </Field>
-        <Field label="Confirm new password" htmlFor="confirmPassword">
-          <Input
-            name="confirmPassword"
-            type="password"
-            autoComplete="new-password"
-            required
-            minLength={10}
-            maxLength={200}
-            disabled={pending}
-          />
-        </Field>
-        <Button type="submit" variant="secondary" disabled={pending}>
-          {pending ? 'Changing…' : 'Change password'}
-        </Button>
-        <p role="status" aria-live="polite" className="text-sm">
-          {message}
-        </p>
-      </form>
-    </section>
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <form onSubmit={submit} className="space-y-3">
+          <input type="hidden" name="username" value={email} autoComplete="username" />
+          <Field label="Current password" htmlFor="currentPassword">
+            <Input
+              name="currentPassword"
+              type="password"
+              autoComplete="current-password"
+              required
+              maxLength={MAX_PASSWORD}
+              disabled={pending}
+            />
+          </Field>
+          <NewPasswordFields name="newPassword" confirmName="confirmPassword" disabled={pending} />
+          <Button type="submit" disabled={pending}>
+            {pending ? 'Changing…' : 'Change password'}
+          </Button>
+          <p role="status" aria-live="polite" className="text-sm">
+            {message}
+          </p>
+        </form>
+      </CardContent>
+    </Card>
   )
 }

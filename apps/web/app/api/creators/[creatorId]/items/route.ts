@@ -1,6 +1,8 @@
 import { getSessionUser } from '@pb/auth'
 import { can, searchModels } from '@pb/core'
 import { getDb } from '@pb/db'
+import { DEFAULT_ITEM_SORT, ITEM_SORT_OPTIONS } from '@/components/model/item-sort'
+import { pickSort } from '@/lib/sort'
 
 export const dynamic = 'force-dynamic'
 
@@ -34,6 +36,9 @@ export async function GET(
     return Response.json({ error: 'type must be "model" or "package"' }, { status: 400 })
   }
 
+  // Must match the page's order, or "Show more" would append a different slice.
+  const sort = pickSort(searchParams.get('sort') ?? undefined, ITEM_SORT_OPTIONS, DEFAULT_ITEM_SORT)
+
   const rawOffset = Number.parseInt(searchParams.get('offset') ?? '0', 10)
   const rawLimit = Number.parseInt(searchParams.get('limit') ?? '48', 10)
 
@@ -43,6 +48,7 @@ export async function GET(
   const result = await searchModels(getDb(), {
     creatorIds: [creatorId],
     isPackage: type === 'package',
+    sort,
     offset,
     limit,
     includeFacets: false,

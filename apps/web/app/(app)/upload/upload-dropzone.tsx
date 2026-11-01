@@ -6,6 +6,7 @@ import * as tus from 'tus-js-client'
 import { CheckCircle2, FolderUp, TriangleAlert, Upload, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/cn'
+import { formatBytes } from '@/lib/format'
 import { createUploadTicket } from './actions'
 
 /**
@@ -33,13 +34,6 @@ interface Item {
   status: Status
   error?: string
   upload?: tus.Upload
-}
-
-/** Formats the same way the rest of the app does. */
-function formatSize(bytes: number): string {
-  const units = ['B', 'KB', 'MB', 'GB']
-  const exponent = Math.min(Math.floor(Math.log(Math.max(bytes, 1)) / Math.log(1024)), 3)
-  return `${(bytes / 1024 ** exponent).toFixed(exponent === 0 ? 0 : 1)} ${units[exponent]}`
 }
 
 export function UploadDropzone({
@@ -269,7 +263,7 @@ export function UploadDropzone({
         <>
           <div className="flex items-center justify-between">
             <p className="text-sm text-[var(--color-ink-muted)]">
-              {items.length} file{items.length === 1 ? '' : 's'} · {formatSize(totalBytes)}
+              {items.length} file{items.length === 1 ? '' : 's'} · {formatBytes(totalBytes)}
             </p>
             <div className="flex gap-2">
               <Button variant="ghost" size="sm" disabled={busy} onClick={() => setItems([])}>
@@ -318,18 +312,20 @@ export function UploadDropzone({
                 <span className="shrink-0 text-xs tabular-nums text-[var(--color-ink-muted)]">
                   {item.status === 'uploading'
                     ? `${Math.round(item.progress * 100)}%`
-                    : formatSize(item.file.size)}
+                    : formatBytes(item.file.size)}
                 </span>
 
                 {item.status !== 'done' && (
-                  <button
+                  <Button
                     type="button"
+                    variant="ghost"
+                    size="icon"
                     onClick={() => cancel(item)}
                     aria-label={`Remove ${item.relativePath}`}
-                    className="shrink-0 text-[var(--color-ink-faint)] hover:text-[var(--color-ink)]"
+                    className="size-7 shrink-0"
                   >
-                    <X className="size-4" />
-                  </button>
+                    <X />
+                  </Button>
                 )}
               </li>
             ))}

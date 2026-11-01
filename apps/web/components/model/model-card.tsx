@@ -3,12 +3,9 @@ import { FileStack, Package } from 'lucide-react'
 import { cn } from '@/lib/cn'
 import { CardPreview } from './card-preview'
 
-export function formatBytes(bytes: number): string {
-  if (!bytes) return '0 B'
-  const units = ['B', 'KB', 'MB', 'GB', 'TB']
-  const exponent = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1)
-  return `${(bytes / 1024 ** exponent).toFixed(exponent === 0 ? 0 : 1)} ${units[exponent]}`
-}
+import { formatBytes } from '@/lib/format'
+
+export { formatBytes }
 
 /** Millimetres, rounded the way a printer would quote them. */
 export function formatDimensions(x?: number, y?: number, z?: number): string | null {
@@ -62,36 +59,20 @@ export function ModelCard({
     >
       <div
         className="relative flex aspect-[4/3] items-center justify-center overflow-hidden"
-        style={
-          previewImageFileId || thumbFileId
-            ? // A subtle tint behind the render, so a transparent thumbnail still
-              // sits on something rather than floating on the card colour.
-              {
-                background: `linear-gradient(160deg, oklch(96% 0.012 ${hue}), oklch(90% 0.02 ${hue + 20}))`,
-              }
-            : {
-                background: `linear-gradient(145deg, oklch(72% 0.07 ${hue}) 0%, oklch(58% 0.09 ${hue + 24}) 100%)`,
-              }
-        }
+        style={{
+          // The placeholder colour; once a picture exists CardPreview paints its
+          // own lighter tint behind it, so a transparent render still sits on
+          // something rather than floating on the card colour.
+          background: `linear-gradient(145deg, oklch(72% 0.07 ${hue}) 0%, oklch(58% 0.09 ${hue + 24}) 100%)`,
+        }}
       >
-        {previewImageFileId || thumbFileId ? (
-          // Plain img rather than next/image: these are already the right size,
-          // already WebP, and immutably cached, so the optimiser adds only cost.
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={
-              previewImageFileId
-                ? `/api/files/${previewImageFileId}/raw?inline=1`
-                : `/api/files/${thumbFileId}/thumb${thumbKey ? `?v=${encodeURIComponent(thumbKey)}` : ''}`
-            }
-            alt=""
-            loading="lazy"
-            decoding="async"
-            className="size-full object-contain transition-transform duration-200 group-hover:scale-[1.03]"
-          />
-        ) : (
-          <CardPreview publicId={publicId} hue={hue} />
-        )}
+        <CardPreview
+          publicId={publicId}
+          previewImageFileId={previewImageFileId}
+          thumbFileId={thumbFileId}
+          thumbKey={thumbKey}
+          hue={hue}
+        />
         {previewExtension && (
           <span className="absolute bottom-2 right-2 rounded bg-black/35 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-white/90 backdrop-blur-sm">
             {previewExtension}
@@ -113,8 +94,14 @@ export function ModelCard({
           {name}
         </h3>
         <p className="truncate text-xs text-[var(--color-ink-faint)]" title={path}>
-          {libraryName ? `${libraryName} · ` : ''}
-          {path}
+          {/*
+           * The folder is usually named after the model, and the title above
+           * already says that; the path only earns its place when it adds a
+           * parent folder or a different name.
+           */}
+          {[libraryName, path.toLowerCase() === name.toLowerCase() ? null : path]
+            .filter(Boolean)
+            .join(' · ')}
         </p>
         {(fileCount > 0 || totalSize > 0) && (
           <p className="mt-auto flex items-center gap-1.5 pt-1 text-xs text-[var(--color-ink-muted)]">

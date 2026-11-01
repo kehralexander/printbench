@@ -1,7 +1,7 @@
 import Link from 'next/link'
 import type { Route } from 'next'
 import { sql } from 'drizzle-orm'
-import { Printer } from 'lucide-react'
+import { Printer, Settings2 } from 'lucide-react'
 import { getSessionUser } from '@pb/auth'
 import {
   can,
@@ -18,11 +18,23 @@ import { getDb, schema } from '@pb/db'
 import { PageHeader } from '@/components/shell/page-header'
 import { NotPermitted } from '@/components/shell/not-permitted'
 import { Badge } from '@/components/ui/badge'
-import { Card } from '@/components/ui/card'
+import { Swatch } from '@/components/ui/swatch'
+import { Button } from '@/components/ui/button'
+import { Card, CardTitle } from '@/components/ui/card'
 import { EmptyState } from '@/components/ui/empty-state'
 import { AutoRefresh } from '@/components/ui/auto-refresh'
+import { ListToolbar } from '@/components/ui/list-toolbar'
+import { UrlSortControl } from '@/components/ui/sort-control'
 import { PrintProgress } from '@/components/printer/live-progress'
+import { NextUpHint } from '@/components/printer/next-up-hint'
+import {
+  PRINTER_SORTS,
+  compareState,
+  printDoneAt,
+  printerState,
+} from '@/components/printer/printer-state'
 import { readPrintersLive } from '@/lib/printer-live'
+import { pickSort } from '@/lib/sort'
 
 export const dynamic = 'force-dynamic'
 export const metadata = { title: 'Printer status' }
@@ -48,10 +60,16 @@ interface JobRequest {
  * between viewers for a few seconds, see lib/printer-live.ts — and nothing here
  * is stored except when each was last reachable.
  */
-export default async function PrintersPage() {
+export default async function PrintersPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ sort?: string }>
+}) {
   const user = await getSessionUser()
   if (!can(user, 'model:view')) return <NotPermitted what="printer status" />
 
+  const sort = pickSort((await searchParams).sort, PRINTER_SORTS, 'name')
+  const canManage = can(user, 'printhost:manage')
   const db = getDb()
   const hosts = await db.select().from(schema.printHosts).orderBy(schema.printHosts.name)
 
@@ -64,13 +82,10 @@ export default async function PrintersPage() {
           title="No printers yet"
           description="Add a networked printer — Moonraker (Klipper, KX-Bridge), OctoPrint or PrusaLink — and its status shows up here."
           action={
-            can(user, 'printhost:manage') ? (
-              <Link
-                href="/admin/printers"
-                className="text-sm text-[var(--color-accent)] hover:underline"
-              >
-                Add a printer
-              </Link>
+            canManage ? (
+              <Button asChild variant="secondary">
+                <Link href="/admin/printers">Add a printer</Link>
+              </Button>
             ) : undefined
           }
         />
@@ -88,7 +103,7 @@ export default async function PrintersPage() {
     openJobRequests(),
     countUnmatchedJobs(db),
   ])
-  const doneAt = readings.map(doneAround)
+  const doneAt = readings.map(({ status, readAt }) => printDoneAt(status, readAt))
 
   // For idle printers, what in the queue they could start next.
   const queue = can(user, 'request:create')
@@ -106,37 +121,59 @@ export default async function PrintersPage() {
     ).map((hint) => [hint.printerId, hint]),
   )
 
+  // Hosts come by name; the status order keeps that within each state.
+  const order = hosts.map((_, index) => index)
+  if (sort === 'status') {
+    order.sort((a, b) => compareState(statuses[a]!.state, statuses[b]!.state))
+  }
+
   return (
     <>
       <AutoRefresh intervalMs={REFRESH_MS} />
       <PageHeader
         title="Printer status"
         description="What each printer is doing right now. Updates every few seconds."
-      />
-      {unmatched > 0 && (
-        <p className="-mt-5 mb-6 text-sm">
-          <Link href="/printers/jobs" className="text-[var(--color-accent)] hover:underline">
-            {unmatched} {unmatched === 1 ? 'print' : 'prints'} not in the library
-          </Link>
-          <span className="text-[var(--color-ink-muted)]">
-            {' '}
+        actions={
+          canManage ? (
+            <Button asChild variant="secondary" size="sm">
+              <Link href="/admin/printers">
+                <Settings2 />
+                Manage printers
+              </Link>
+            </Button>
+          ) : undefined
+        }
+      >
+        {unmatched > 0 && (
+          <>
+            <Link href="/printers/jobs" className="text-[var(--color-accent)] hover:underline">
+              {unmatched} {unmatched === 1 ? 'print' : 'prints'} not in the library
+            </Link>{' '}
             — link {unmatched === 1 ? 'it' : 'them'} to a model to complete the history.
-          </span>
-        </p>
+          </>
+        )}
+      </PageHeader>
+      {hosts.length > 1 && (
+        <ListToolbar
+          sort={<UrlSortControl options={PRINTER_SORTS} value={sort} defaultValue="name" />}
+        />
       )}
-      <div className="grid gap-4 lg:grid-cols-2">
-        {hosts.map((host, index) => (
-          <PrinterCard
-            key={host.id}
-            name={host.name}
-            status={statuses[index]!}
-            file={files[index] ?? null}
-            request={statuses[index]!.busy ? (jobRequests.get(host.id) ?? null) : null}
-            doneAt={doneAt[index] ?? null}
-            ageSec={readings[index]!.ageSec}
-            hint={hints.get(host.id) ?? null}
-          />
-        ))}
+      <div className="grid items-start gap-4 lg:grid-cols-2">
+        {order.map((index) => {
+          const host = hosts[index]!
+          return (
+            <PrinterCard
+              key={host.id}
+              name={host.name}
+              status={statuses[index]!}
+              file={files[index] ?? null}
+              request={statuses[index]!.busy ? (jobRequests.get(host.id) ?? null) : null}
+              doneAt={doneAt[index] ?? null}
+              ageSec={readings[index]!.ageSec}
+              hint={hints.get(host.id) ?? null}
+            />
+          )
+        })}
       </div>
     </>
   )
@@ -169,22 +206,6 @@ async function openJobRequests(): Promise<Map<string, JobRequest>> {
   )
 }
 
-/** A paused job has no finish time; it ends whenever someone resumes it. */
-function doneAround({ status, readAt }: { status: PrinterStatus; readAt: number }): string | null {
-  if (status.state !== 'printing' || status.remainingSec == null) return null
-  return new Date(readAt + status.remainingSec * 1000).toISOString()
-}
-
-const STATE_LABEL: Record<PrinterStatus['state'], string> = {
-  idle: 'Idle',
-  printing: 'Printing',
-  paused: 'Paused',
-  complete: 'Finished',
-  cancelled: 'Cancelled',
-  error: 'Error',
-  offline: 'Offline',
-}
-
 function PrinterCard({
   name,
   status,
@@ -205,22 +226,15 @@ function PrinterCard({
   /** What it could start next from the queue, when it is idle. */
   hint: LoadNextHint | null
 }) {
-  const tone =
-    status.state === 'printing'
-      ? 'accent'
-      : status.state === 'error' || status.state === 'offline'
-        ? 'danger'
-        : 'neutral'
+  const state = printerState(status.state)
   // Finished and cancelled still name the last job; idle has nothing to show.
   const showJob = status.filename && status.state !== 'idle' && status.state !== 'offline'
 
   return (
     <Card className="space-y-4 p-4">
       <div className="flex items-center justify-between gap-3">
-        <h2 className="truncate text-base font-semibold">{name}</h2>
-        <Badge tone={tone}>
-          {status.busy ? `Busy · ${STATE_LABEL[status.state]}` : STATE_LABEL[status.state]}
-        </Badge>
+        <CardTitle className="truncate">{name}</CardTitle>
+        <Badge tone={state.tone}>{state.label}</Badge>
       </div>
 
       {status.message && (
@@ -290,31 +304,7 @@ function PrinterCard({
         />
       )}
 
-      {hint && (
-        <div className="rounded-[var(--radius-control)] bg-[var(--color-surface-2)] px-3 py-2 text-sm">
-          {hint.ready ? (
-            <p>
-              <span className="font-medium">Next up:</span>{' '}
-              <Link href="/queue" className="text-[var(--color-accent)] hover:underline">
-                {hint.ready.request.title}
-              </Link>
-              {hint.ready.slot && (
-                <span className="text-[var(--color-ink-muted)]">
-                  {' '}
-                  · loaded in slot {hint.ready.slot.index + 1}
-                </span>
-              )}
-            </p>
-          ) : (
-            <p className="text-[var(--color-ink-muted)]">Nothing queued matches what is loaded.</p>
-          )}
-          {hint.swap && (
-            <p className="mt-0.5 text-xs text-[var(--color-ink-muted)]">
-              Most urgent is {hint.swap.request.title}: load {hint.swap.filament}.
-            </p>
-          )}
-        </div>
-      )}
+      {hint && <NextUpHint hint={hint} />}
 
       {status.slots && status.slots.length > 0 && <Slots slots={status.slots} />}
 
@@ -350,12 +340,7 @@ function Slots({ slots }: { slots: FilamentSlot[] }) {
                 : 'flex items-center gap-2 rounded-[var(--radius-control)] border border-[var(--color-border)] px-2 py-1.5'
             }
           >
-            <span
-              className="size-4 shrink-0 rounded-full ring-1 ring-inset ring-[var(--color-border)]"
-              style={{
-                backgroundColor: slot.loaded ? (slot.colorHex ?? 'transparent') : 'transparent',
-              }}
-            />
+            <Swatch color={slot.loaded ? slot.colorHex : null} className="size-4" />
             <span className="min-w-0 text-xs">
               <span className="block font-medium">
                 Slot {slot.index + 1}

@@ -3,6 +3,8 @@
 import { useId, useState } from 'react'
 import { X } from 'lucide-react'
 import { formatEstimate, parseEstimate } from '@pb/core/requests'
+import { Button } from '@/components/ui/button'
+import { Field } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import type { FilamentOption } from '@/lib/filament-options'
@@ -165,20 +167,21 @@ export function MaterialPicker({
               }
               className={
                 value.colorHex
-                  ? 'size-9 cursor-pointer rounded border border-[var(--color-border)] bg-transparent'
-                  : 'size-9 cursor-pointer rounded border border-dashed border-[var(--color-border)] bg-transparent opacity-50'
+                  ? 'size-9 cursor-pointer rounded-[var(--radius-control)] border border-[var(--color-border)] bg-transparent'
+                  : 'size-9 cursor-pointer rounded-[var(--radius-control)] border border-dashed border-[var(--color-border)] bg-transparent opacity-50'
               }
             />
             {value.colorHex && (
-              <button
+              <Button
                 type="button"
+                variant="ghost"
+                size="icon"
                 aria-label="No specific colour"
                 title="No specific colour"
                 onClick={() => onChange({ ...value, colorHex: '', spoolmanSpoolId: null })}
-                className="text-[var(--color-ink-faint)] hover:text-[var(--color-ink)]"
               >
-                <X className="size-4" />
-              </button>
+                <X />
+              </Button>
             )}
           </span>
         </div>
@@ -210,29 +213,28 @@ export function EstimateInput({
   const invalid = value.trim().length > 0 && parsed == null
 
   return (
-    <div className="space-y-1.5">
-      <label htmlFor={id} className="block text-sm font-medium">
-        Print time <span className="font-normal text-[var(--color-ink-faint)]">(one print)</span>
-      </label>
+    <Field
+      label={
+        <>
+          Print time <span className="font-normal text-[var(--color-ink-faint)]">(one print)</span>
+        </>
+      }
+      htmlFor={id}
+      hint={
+        invalid
+          ? undefined
+          : parsed != null && quantity > 1
+            ? `${formatEstimate(parsed * quantity)} for all ${quantity}`
+            : (hint ?? 'Optional')
+      }
+      error={invalid ? 'Try "2h 10m", "2:10" or a number of minutes.' : undefined}
+    >
       <Input
-        id={id}
         value={value}
         onChange={(event) => onChange(event.target.value)}
         placeholder="e.g. 2h 10m"
-        aria-invalid={invalid || undefined}
       />
-      <p
-        className={
-          invalid ? 'text-xs text-[var(--color-danger)]' : 'text-xs text-[var(--color-ink-faint)]'
-        }
-      >
-        {invalid
-          ? 'Try "2h 10m", "2:10" or a number of minutes.'
-          : parsed != null && quantity > 1
-            ? `${formatEstimate(parsed * quantity)} for all ${quantity}`
-            : (hint ?? 'Optional')}
-      </p>
-    </div>
+    </Field>
   )
 }
 

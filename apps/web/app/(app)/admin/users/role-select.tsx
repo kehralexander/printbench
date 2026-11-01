@@ -2,11 +2,9 @@
 
 import { useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
-import { ROLE_ORDER } from '@pb/core/policy'
-import { cn } from '@/lib/cn'
+import { Select } from '@/components/ui/select'
 import { setUserRole } from './actions'
-
-const LABELS: Record<string, string> = { admin: 'Admin', member: 'Member', viewer: 'Viewer' }
+import { ROLE_CHOICES, ROLE_LABELS } from './roles'
 
 export function RoleSelect({
   userId,
@@ -39,23 +37,20 @@ export function RoleSelect({
 
   return (
     <div className="flex items-center gap-2">
-      <select
+      <Select
         value={value}
         disabled={disabled || pending}
         onChange={(event) => onChange(event.target.value)}
         aria-label="Role"
-        className={cn(
-          'h-8 rounded-[var(--radius-control)] border border-[var(--color-border)] bg-[var(--color-surface)] px-2 text-sm',
-          'disabled:cursor-not-allowed disabled:opacity-50',
-        )}
+        className="h-8 w-auto disabled:cursor-not-allowed"
         title={disabled ? 'You cannot change your own role' : undefined}
       >
-        {[...ROLE_ORDER].reverse().map((r) => (
+        {ROLE_CHOICES.map((r) => (
           <option key={r} value={r}>
-            {LABELS[r]}
+            {ROLE_LABELS[r]}
           </option>
         ))}
-      </select>
+      </Select>
       {error && <span className="text-xs text-[var(--color-danger)]">{error}</span>}
     </div>
   )

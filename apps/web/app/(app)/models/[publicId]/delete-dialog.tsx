@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation'
 import { AlertTriangle, EyeOff, Loader2, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Dialog, DialogContent } from '@/components/ui/dialog'
 import { deleteFiles, removeFromLibrary } from './delete-actions'
 
 /**
@@ -19,13 +19,17 @@ import { deleteFiles, removeFromLibrary } from './delete-actions'
  * Deleting files asks for the model's name to be typed. That is deliberate
  * friction: it is the one irreversible action in the whole application.
  */
-export function DeleteButton({
+export function DeleteDialog({
   publicId,
   name,
   libraryName,
   fileCount,
   canDeleteFiles,
+  open,
+  onOpenChange,
 }: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
   publicId: string
   name: string
   libraryName: string
@@ -66,36 +70,24 @@ export function DeleteButton({
   }
 
   return (
-    <Popover
-      onOpenChange={(open) => {
-        if (open) return
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        onOpenChange(next)
+        if (next) return
         setConfirming(false)
         setTyped('')
         setError(null)
       }}
     >
-      <PopoverTrigger asChild>
-        <Button variant="ghost" size="sm" title={`Remove ${name}`}>
-          <Trash2 />
-          <span className="hidden sm:inline">Remove</span>
-        </Button>
-      </PopoverTrigger>
-
-      <PopoverContent className="w-80 space-y-3 p-3">
+      <DialogContent size="sm" title={`Remove ${name}`} className="space-y-3">
         {!confirming ? (
           <>
-            <div>
-              <Button variant="secondary" size="sm" disabled={pending} onClick={remove}>
-                {pending ? <Loader2 className="animate-spin" /> : <EyeOff />}
-                Remove from library
-              </Button>
-              <p className="mt-1.5 text-xs text-[var(--color-ink-muted)]">
-                Forgets this model. The {fileCount} file{fileCount === 1 ? '' : 's'} stay exactly
-                where they are in {libraryName}, and a scan will not bring it back. You can undo
-                this from the library settings.
-              </p>
-            </div>
-
+            <p className="text-sm text-[var(--color-ink-muted)]">
+              Forgets this model. The {fileCount} file{fileCount === 1 ? '' : 's'} stay exactly
+              where they are in {libraryName}, and a scan will not bring it back. You can undo this
+              from the library settings.
+            </p>
             {canDeleteFiles ? (
               <div className="border-t border-[var(--color-border)] pt-3">
                 <Button
@@ -121,6 +113,17 @@ export function DeleteButton({
                 remove them for good, delete the folder yourself and scan again.
               </p>
             )}
+
+            {/* Last, like every dialog footer: Cancel, then the action. */}
+            <div className="flex justify-end gap-2">
+              <Button variant="ghost" size="sm" onClick={() => onOpenChange(false)}>
+                Cancel
+              </Button>
+              <Button variant="danger" size="sm" disabled={pending} onClick={remove}>
+                {pending ? <Loader2 className="animate-spin" /> : <EyeOff />}
+                Remove from library
+              </Button>
+            </div>
           </>
         ) : (
           <>
@@ -137,7 +140,10 @@ export function DeleteButton({
               onChange={(e) => setTyped(e.target.value)}
               placeholder={name}
             />
-            <div className="flex gap-2">
+            <div className="flex justify-end gap-2">
+              <Button variant="ghost" size="sm" onClick={() => setConfirming(false)}>
+                Cancel
+              </Button>
               <Button
                 variant="danger"
                 size="sm"
@@ -147,15 +153,12 @@ export function DeleteButton({
                 {pending && <Loader2 className="animate-spin" />}
                 Delete permanently
               </Button>
-              <Button variant="ghost" size="sm" onClick={() => setConfirming(false)}>
-                Cancel
-              </Button>
             </div>
           </>
         )}
 
         {error && <p className="text-xs text-[var(--color-danger)]">{error}</p>}
-      </PopoverContent>
-    </Popover>
+      </DialogContent>
+    </Dialog>
   )
 }

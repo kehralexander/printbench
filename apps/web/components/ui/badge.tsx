@@ -11,6 +11,10 @@ const badge = cva(
           'bg-[var(--color-surface-2)] text-[var(--color-ink-muted)] ring-[var(--color-border)]',
         accent: 'bg-[var(--color-accent-soft)] text-[var(--color-accent)] ring-transparent',
         danger: 'bg-[var(--color-danger-soft)] text-[var(--color-danger)] ring-transparent',
+        warning:
+          'bg-[color-mix(in_oklch,var(--color-warning)_16%,transparent)] text-[var(--color-ink)] ring-[color-mix(in_oklch,var(--color-warning)_45%,transparent)]',
+        success:
+          'bg-[color-mix(in_oklch,var(--color-success)_14%,transparent)] text-[var(--color-success)] ring-transparent',
       },
     },
     defaultVariants: { tone: 'neutral' },

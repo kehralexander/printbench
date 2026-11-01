@@ -6,6 +6,7 @@ import { Menu, X } from 'lucide-react'
 import { PrintBenchMark } from '@/components/brand/logo'
 import type { Action, PolicyUser } from '@pb/core/policy'
 import { can } from '@pb/core/policy'
+import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/cn'
 import { NAV_SECTIONS, NavLink } from './nav'
 import { UserMenu } from './user-menu'
@@ -32,14 +33,16 @@ export function Sidebar({
     <>
       {/* Mobile bar */}
       <div className="flex items-center gap-2 border-b border-[var(--color-border)] px-3 py-2 lg:hidden">
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="icon"
           onClick={() => setOpen(true)}
           aria-label="Open navigation"
-          className="flex size-9 items-center justify-center rounded-[var(--radius-control)] text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-2)]"
+          className="[&_svg]:size-5"
         >
-          <Menu className="size-5" />
-        </button>
+          <Menu />
+        </Button>
         <Link href="/" className="flex items-center gap-2 font-semibold">
           <PrintBenchMark className="h-7 w-auto shrink-0" />
           {siteName}
@@ -68,14 +71,16 @@ export function Sidebar({
             <PrintBenchMark className="h-8 w-auto shrink-0" />
             <span className="truncate">{siteName}</span>
           </Link>
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="icon"
             onClick={() => setOpen(false)}
             aria-label="Close navigation"
-            className="ml-auto flex size-8 shrink-0 items-center justify-center rounded-md text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-2)] lg:hidden"
+            className="ml-auto size-8 shrink-0 lg:hidden"
           >
-            <X className="size-4" />
-          </button>
+            <X />
+          </Button>
         </div>
 
         <div className="shrink-0 px-3 pb-3">

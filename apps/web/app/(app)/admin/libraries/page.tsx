@@ -10,30 +10,40 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
-import { ScanButton } from './scan-button'
+import { ListToolbar } from '@/components/ui/list-toolbar'
+import { LocalTime } from '@/components/ui/local-time'
+import { UrlSortControl } from '@/components/ui/sort-control'
+import { formatBytes } from '@/lib/format'
+import { compareDesc, compareText, pickSort, type SortOption } from '@/lib/sort'
+import { LibraryActions } from './library-actions'
 import { SchedulePicker } from './schedule-picker'
 import { RemovedModels } from './removed-models'
-import { DeleteLibraryButton } from './delete-library-button'
 
 export const dynamic = 'force-dynamic'
 export const metadata = { title: 'Libraries' }
 
 const NUMBER = new Intl.NumberFormat('en-GB')
-const DATE = new Intl.DateTimeFormat('en-GB', { dateStyle: 'medium', timeStyle: 'short' })
 
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return '0 B'
-  const units = ['B', 'KB', 'MB', 'GB', 'TB']
-  const exponent = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1)
-  return `${(bytes / 1024 ** exponent).toFixed(exponent === 0 ? 0 : 1)} ${units[exponent]}`
-}
+type LibrarySort = 'newest' | 'name' | 'models' | 'size' | 'scanned'
+const SORTS: readonly SortOption<LibrarySort>[] = [
+  { value: 'newest', label: 'Newest' },
+  { value: 'name', label: 'Name' },
+  { value: 'models', label: 'Most models' },
+  { value: 'size', label: 'Largest' },
+  { value: 'scanned', label: 'Last scanned' },
+]
 
-export default async function LibrariesPage() {
+export default async function LibrariesPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ sort?: string }>
+}) {
   const user = await getSessionUser()
   if (!can({ id: user?.id ?? '', role: user?.role ?? null }, 'library:manage')) {
     return <NotPermitted what="library management" />
   }
 
+  const sort = pickSort((await searchParams).sort, SORTS, 'newest')
   const db = getDb()
 
   const removed = await listExclusions(db)
@@ -54,6 +64,7 @@ export default async function LibrariesPage() {
     })
     .from(schema.libraries)
     .orderBy(desc(schema.libraries.createdAt))
+  type Library = (typeof libraries)[number]
 
   // One aggregate for all libraries rather than a query per row.
   const stats = await db.execute<{
@@ -86,18 +97,41 @@ export default async function LibrariesPage() {
   `)
   const runById = new Map(runs.rows.map((row) => [row.library_id, row]))
 
+  /*
+   * Sorted here rather than in SQL: the counts and the last scan come from the
+   * two aggregates above, and an admin has a handful of libraries at most.
+   */
+  if (sort !== 'newest') {
+    const by: Record<Exclude<LibrarySort, 'newest'>, (a: Library, b: Library) => number> = {
+      name: (a, b) => compareText(a.name, b.name),
+      models: (a, b) =>
+        compareDesc(statsById.get(a.id)?.models ?? 0, statsById.get(b.id)?.models ?? 0),
+      size: (a, b) =>
+        compareDesc(
+          Number(statsById.get(a.id)?.total_size ?? 0),
+          Number(statsById.get(b.id)?.total_size ?? 0),
+        ),
+      scanned: (a, b) =>
+        compareDesc(runById.get(a.id)?.finished_at, runById.get(b.id)?.finished_at),
+    }
+    libraries.sort(by[sort])
+  }
+
   return (
     <>
       <PageHeader
         title="Libraries"
         description="Folders PrintBench indexes. Your files are never moved or renamed."
         actions={
-          <Button asChild>
-            <Link href="/admin/libraries/new">
-              <FolderPlus />
-              Add library
-            </Link>
-          </Button>
+          // The empty state below offers the same thing, more prominently.
+          libraries.length > 0 && (
+            <Button asChild>
+              <Link href="/admin/libraries/new">
+                <FolderPlus />
+                Add library
+              </Link>
+            </Button>
+          )
         }
       />
 
@@ -116,121 +150,138 @@ export default async function LibrariesPage() {
           }
         />
       ) : (
-        <div className="space-y-3">
-          {libraries.map((library) => {
-            const stat = statsById.get(library.id)
-            const run = runById.get(library.id)
-            const aborted = run?.status === 'aborted'
+        <>
+          <ListToolbar
+            sort={
+              <UrlSortControl
+                options={SORTS}
+                value={sort}
+                defaultValue="newest"
+                count={libraries.length}
+              />
+            }
+          />
+          <div className="space-y-3">
+            {libraries.map((library) => {
+              const stat = statsById.get(library.id)
+              const run = runById.get(library.id)
+              const aborted = run?.status === 'aborted'
 
-            return (
-              <Card key={library.id}>
-                <CardContent className="flex flex-wrap items-start gap-4 p-5">
-                  <span className="flex size-10 shrink-0 items-center justify-center rounded-[var(--radius-control)] bg-[var(--color-surface-2)] text-[var(--color-ink-faint)]">
-                    <HardDrive className="size-5" />
-                  </span>
+              return (
+                <Card key={library.id}>
+                  <CardContent className="flex flex-wrap items-start gap-4 p-5">
+                    <span className="flex size-10 shrink-0 items-center justify-center rounded-[var(--radius-control)] bg-[var(--color-surface-2)] text-[var(--color-ink-faint)]">
+                      <HardDrive className="size-5" />
+                    </span>
 
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <h2 className="font-semibold">{library.name}</h2>
-                      {library.kind === 'in_place' && (
-                        <Badge tone="neutral">
-                          <Lock className="size-3" />
-                          Read-only
-                        </Badge>
-                      )}
-                      {!library.scanEnabled && <Badge tone="neutral">Scanning off</Badge>}
-                    </div>
+                    {/* basis-60: on a phone the actions wrap below the details
+                        instead of squeezing them into a narrow column. */}
+                    <div className="min-w-0 flex-1 basis-60">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h2 className="font-semibold">{library.name}</h2>
+                        {library.kind === 'in_place' && (
+                          <Badge tone="neutral">
+                            <Lock className="size-3" />
+                            Read-only
+                          </Badge>
+                        )}
+                        {!library.scanEnabled && <Badge tone="neutral">Scanning off</Badge>}
+                      </div>
 
-                    <p className="mt-0.5 truncate font-mono text-xs text-[var(--color-ink-faint)]">
-                      {library.path}
-                    </p>
+                      <p className="mt-0.5 truncate font-mono text-xs text-[var(--color-ink-faint)]">
+                        {library.path}
+                      </p>
 
-                    <p className="mt-2 text-sm text-[var(--color-ink-muted)]">
-                      {/*
+                      <p className="mt-2 text-sm text-[var(--color-ink-muted)]">
+                        {/*
                         A count is the obvious thing to click when you want to
                         see what it counted. Search already filters by library,
                         so this needs no new page — just the link nobody had
                         put on it.
                       */}
-                      {(stat?.models ?? 0) > 0 ? (
-                        <Link
-                          href={`/models?library=${library.id}`}
-                          className="font-medium text-[var(--color-ink)] underline decoration-[var(--color-border-strong)] underline-offset-2 hover:decoration-[var(--color-accent)]"
-                        >
-                          {NUMBER.format(stat!.models)} models
-                        </Link>
-                      ) : (
-                        <>0 models</>
-                      )}{' '}
-                      · {NUMBER.format(stat?.files ?? 0)} files ·{' '}
-                      {formatBytes(Number(stat?.total_size ?? 0))}
-                    </p>
+                        {(stat?.models ?? 0) > 0 ? (
+                          <Link
+                            href={`/models?library=${library.id}`}
+                            className="font-medium text-[var(--color-accent)] hover:underline"
+                          >
+                            {NUMBER.format(stat!.models)} models
+                          </Link>
+                        ) : (
+                          <>0 models</>
+                        )}{' '}
+                        · {NUMBER.format(stat?.files ?? 0)} files ·{' '}
+                        {formatBytes(Number(stat?.total_size ?? 0))}
+                      </p>
 
-                    <div className="mt-2">
-                      <SchedulePicker
-                        libraryId={library.id}
-                        cron={library.scanCron ?? ''}
-                        enabled={library.scanEnabled}
-                        watchable={library.backend === 'local'}
-                        watching={library.watchEnabled}
-                        nextRunLabel={
-                          /*
-                           * Formatted on the server so the label and the
-                           * schedule agree about the timezone — cron is read in
-                           * the server's local time, not the browser's.
-                           */
-                          library.scanEnabled
-                            ? (nextRun(library.scanCron)?.toLocaleString('en-GB', {
-                                weekday: 'short',
-                                hour: '2-digit',
-                                minute: '2-digit',
-                              }) ?? null)
-                            : null
-                        }
-                      />
+                      <div className="mt-2">
+                        <SchedulePicker
+                          libraryId={library.id}
+                          cron={library.scanCron ?? ''}
+                          enabled={library.scanEnabled}
+                          watchable={library.backend === 'local'}
+                          watching={library.watchEnabled}
+                          nextRunLabel={
+                            /*
+                             * Formatted on the server so the label and the
+                             * schedule agree about the timezone — cron is read in
+                             * the server's local time, not the browser's.
+                             */
+                            library.scanEnabled
+                              ? (nextRun(library.scanCron)?.toLocaleString('en-GB', {
+                                  weekday: 'short',
+                                  hour: '2-digit',
+                                  minute: '2-digit',
+                                }) ?? null)
+                              : null
+                          }
+                        />
+                      </div>
+
+                      {run && (
+                        <p
+                          className={
+                            aborted
+                              ? 'mt-2 text-sm text-[var(--color-danger)]'
+                              : 'mt-2 text-xs text-[var(--color-ink-faint)]'
+                          }
+                        >
+                          {aborted ? (
+                            <>
+                              Last scan was stopped for safety (
+                              {run.abort_reason?.replace(/_/g, ' ')}
+                              ). Nothing was removed from the index.
+                            </>
+                          ) : (
+                            <>
+                              Last {run.mode} scan{' '}
+                              {run.finished_at ? (
+                                <LocalTime value={new Date(run.finished_at).toISOString()} />
+                              ) : (
+                                'in progress'
+                              )}
+                              {run.models_created > 0 && ` · ${run.models_created} added`}
+                              {run.models_missing > 0 && ` · ${run.models_missing} missing`}
+                            </>
+                          )}
+                        </p>
+                      )}
                     </div>
 
-                    {run && (
-                      <p
-                        className={
-                          aborted
-                            ? 'mt-2 text-sm text-[var(--color-danger)]'
-                            : 'mt-2 text-xs text-[var(--color-ink-faint)]'
-                        }
-                      >
-                        {aborted ? (
-                          <>
-                            Last scan was stopped for safety ({run.abort_reason?.replace(/_/g, ' ')}
-                            ). Nothing was removed from the index.
-                          </>
-                        ) : (
-                          <>
-                            Last {run.mode} scan{' '}
-                            {run.finished_at
-                              ? DATE.format(new Date(run.finished_at))
-                              : 'in progress'}
-                            {run.models_created > 0 && ` · ${run.models_created} added`}
-                            {run.models_missing > 0 && ` · ${run.models_missing} missing`}
-                          </>
-                        )}
-                      </p>
-                    )}
-                  </div>
-
-                  <div className="flex flex-col items-end gap-1.5">
-                    <ScanButton libraryId={library.id} needsConfirmation={aborted} />
-                    <DeleteLibraryButton
-                      libraryId={library.id}
-                      name={library.name}
-                      modelCount={stat?.models ?? 0}
-                      writesSidecars={library.writeSidecar}
-                    />
-                  </div>
-                </CardContent>
-              </Card>
-            )
-          })}
-        </div>
+                    <div className="ml-auto flex flex-col items-end gap-1.5">
+                      <LibraryActions
+                        libraryId={library.id}
+                        name={library.name}
+                        modelCount={stat?.models ?? 0}
+                        writesSidecars={library.writeSidecar}
+                        needsConfirmation={aborted}
+                      />
+                    </div>
+                  </CardContent>
+                </Card>
+              )
+            })}
+          </div>
+        </>
       )}
 
       <RemovedModels

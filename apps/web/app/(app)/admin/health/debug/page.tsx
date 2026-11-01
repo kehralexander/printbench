@@ -1,13 +1,18 @@
 import type { Route } from 'next'
 import Link from 'next/link'
+import { AlertTriangle } from 'lucide-react'
 import { debugReportToMarkdown, formatBytes, type DebugReport } from '@pb/core'
+import { PROBLEM_META } from '@pb/core/health'
 import { diagnosticsUser } from '@/lib/diagnostics'
 import { buildDebugReport } from '@/lib/debug-report'
 import { cn } from '@/lib/cn'
 import { PageHeader } from '@/components/shell/page-header'
 import { NotPermitted } from '@/components/shell/not-permitted'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Callout } from '@/components/ui/callout'
 import { LocalTime } from '@/components/ui/local-time'
+import { Table, TBody, TD, TH, THead, TR } from '@/components/ui/table'
+import { StatTile } from '@/components/ui/stat-tile'
 import { ShareReport } from './share-report'
 
 export const dynamic = 'force-dynamic'
@@ -29,40 +34,41 @@ export default async function DebugPage() {
       />
 
       {warnings.length > 0 && (
-        <ul className="mb-6 space-y-2">
+        <div className="mb-6 space-y-2">
           {warnings.map((warning) => (
-            <li
-              key={warning}
-              className="rounded-[var(--radius-card)] border border-[var(--color-danger)] bg-[var(--color-danger-soft)] px-4 py-3 text-sm text-[var(--color-danger)]"
-            >
+            <Callout key={warning} tone="danger" icon={<AlertTriangle />}>
               {warning}
-            </li>
+            </Callout>
           ))}
-        </ul>
+        </div>
       )}
 
+      {/*
+        Status at a glance only. The versions, memory and database details are
+        in the sections below; repeating them up here just made two places to
+        read the same number.
+      */}
       <div className="mb-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Tile label="Version" value={report.app.version} hint={report.app.commit?.slice(0, 12)} />
-        <Tile
-          label="Web"
+        <StatTile
+          value={report.app.version}
+          label="Version"
+          hint={report.app.commit?.slice(0, 12)}
+        />
+        <StatTile
           value={web?.alive ? 'Running' : 'Unknown'}
-          hint={web ? `Node ${web.node ?? '?'} · ${web.rssMb ?? '?'} MB` : 'No heartbeat yet'}
+          label="Web"
+          hint={web ? undefined : 'No heartbeat yet'}
         />
-        <Tile
-          label="Worker"
+        <StatTile
           value={worker ? (worker.alive ? 'Running' : 'Not responding') : 'Never seen'}
-          hint={
-            worker ? `v${worker.version ?? '?'} · ${worker.rssMb ?? '?'} MB` : 'No heartbeat yet'
-          }
-          bad={!worker?.alive}
+          label="Worker"
+          hint={worker ? undefined : 'No heartbeat yet'}
+          tone={worker?.alive ? 'neutral' : 'danger'}
         />
-        <Tile
+        <StatTile
+          value={report.database ? 'Connected' : 'Unavailable'}
           label="Database"
-          value={
-            report.database ? `PostgreSQL ${report.database.version.split(' ')[0]}` : 'Unavailable'
-          }
-          hint={report.database ? formatBytes(report.database.sizeBytes) : undefined}
-          bad={!report.database}
+          tone={report.database ? 'neutral' : 'danger'}
         />
       </div>
 
@@ -73,7 +79,7 @@ export default async function DebugPage() {
         logLines={report.recentErrors.length}
       />
 
-      <div className="mt-6 grid gap-4 lg:grid-cols-2">
+      <div className="mt-6 grid items-start gap-4 lg:grid-cols-2">
         <Section title="Processes">
           {report.processes.length === 0 ? (
             <p className="text-sm text-[var(--color-ink-muted)]">No heartbeats recorded yet.</p>
@@ -147,32 +153,35 @@ export default async function DebugPage() {
           />
         </Section>
 
-        <Section title="Job queues">
+        <Section title="Job queues" flush={Boolean(report.queues)}>
           {report.queues ? (
-            <table className="w-full text-sm">
-              <thead className="text-left text-xs text-[var(--color-ink-muted)]">
-                <tr>
-                  <th className="pb-1 font-medium">Queue</th>
-                  <th className="pb-1 text-right font-medium">Queued</th>
-                  <th className="pb-1 text-right font-medium">Active</th>
-                  <th className="pb-1 text-right font-medium">Failed</th>
-                </tr>
-              </thead>
-              <tbody className="tabular-nums">
+            <Table>
+              <THead>
+                <TR>
+                  <TH>Queue</TH>
+                  <TH className="text-right">Queued</TH>
+                  <TH className="text-right">Active</TH>
+                  <TH className="text-right">Failed</TH>
+                </TR>
+              </THead>
+              <TBody>
                 {report.queues.map((queue) => (
-                  <tr key={queue.name}>
-                    <td className="py-0.5 font-mono text-xs">{queue.name}</td>
-                    <td className="text-right">{queue.queued}</td>
-                    <td className="text-right">{queue.active}</td>
-                    <td
-                      className={cn('text-right', queue.failed > 0 && 'text-[var(--color-danger)]')}
+                  <TR key={queue.name}>
+                    <TD className="py-2 font-mono text-xs">{queue.name}</TD>
+                    <TD className="py-2 text-right">{queue.queued}</TD>
+                    <TD className="py-2 text-right">{queue.active}</TD>
+                    <TD
+                      className={cn(
+                        'py-2 text-right',
+                        queue.failed > 0 && 'text-[var(--color-danger)]',
+                      )}
                     >
                       {queue.failed}
-                    </td>
-                  </tr>
+                    </TD>
+                  </TR>
                 ))}
-              </tbody>
-            </table>
+              </TBody>
+            </Table>
           ) : (
             <p className="text-sm text-[var(--color-danger)]">
               {report.failures.queues ?? 'Unavailable.'}
@@ -181,48 +190,50 @@ export default async function DebugPage() {
         </Section>
       </div>
 
-      <Section title="Libraries" className="mt-4">
+      <Section
+        title="Libraries"
+        className="mt-4"
+        flush={report.libraries.length > 0}
+        footer="Libraries are numbered rather than named: names and paths are left out of the report."
+      >
         {report.libraries.length === 0 ? (
           <p className="text-sm text-[var(--color-ink-muted)]">No libraries yet.</p>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[36rem] text-sm">
-              <thead className="text-left text-xs text-[var(--color-ink-muted)]">
-                <tr>
-                  <th className="pb-1 font-medium">#</th>
-                  <th className="pb-1 font-medium">Type</th>
-                  <th className="pb-1 font-medium">Grouping</th>
-                  <th className="pb-1 text-right font-medium">Models</th>
-                  <th className="pb-1 text-right font-medium">Missing</th>
-                  <th className="pb-1 text-right font-medium">Files</th>
-                  <th className="pb-1 pl-4 font-medium">Last scan</th>
-                </tr>
-              </thead>
-              <tbody className="tabular-nums">
-                {report.libraries.map((library, index) => (
-                  <tr key={index}>
-                    <td className="py-0.5">{index + 1}</td>
-                    <td>
-                      {library.kind} · {library.backend}
-                    </td>
-                    <td>{library.grouping}</td>
-                    <td className="text-right">{library.models.toLocaleString('en-GB')}</td>
-                    <td className="text-right">{library.missingModels.toLocaleString('en-GB')}</td>
-                    <td className="text-right">{library.files.toLocaleString('en-GB')}</td>
-                    <td className="pl-4">
-                      {library.lastScan
-                        ? `${library.lastScan.status}${library.lastScan.abortReason ? ` (${library.lastScan.abortReason})` : ''}`
-                        : 'never'}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <Table className="min-w-[36rem]">
+            <THead>
+              <TR>
+                <TH>#</TH>
+                <TH>Type</TH>
+                <TH>Grouping</TH>
+                <TH className="text-right">Models</TH>
+                <TH className="text-right">Missing</TH>
+                <TH className="text-right">Files</TH>
+                <TH>Last scan</TH>
+              </TR>
+            </THead>
+            <TBody>
+              {report.libraries.map((library, index) => (
+                <TR key={index}>
+                  <TD className="py-2">{index + 1}</TD>
+                  <TD className="py-2">
+                    {library.kind} · {library.backend}
+                  </TD>
+                  <TD className="py-2">{library.grouping}</TD>
+                  <TD className="py-2 text-right">{library.models.toLocaleString('en-GB')}</TD>
+                  <TD className="py-2 text-right">
+                    {library.missingModels.toLocaleString('en-GB')}
+                  </TD>
+                  <TD className="py-2 text-right">{library.files.toLocaleString('en-GB')}</TD>
+                  <TD className="py-2">
+                    {library.lastScan
+                      ? `${library.lastScan.status}${library.lastScan.abortReason ? ` (${library.lastScan.abortReason})` : ''}`
+                      : 'never'}
+                  </TD>
+                </TR>
+              ))}
+            </TBody>
+          </Table>
         )}
-        <p className="mt-3 text-xs text-[var(--color-ink-faint)]">
-          Libraries are numbered rather than named: names and paths are left out of the report.
-        </p>
       </Section>
 
       {report.recentErrors.length > 0 && (
@@ -270,51 +281,54 @@ function summarise(record: Record<string, number>): string {
   const entries = Object.entries(record).filter(([, n]) => n > 0)
   return entries.length === 0
     ? 'none'
-    : entries.map(([key, n]) => `${n.toLocaleString('en-GB')} ${key.replace(/_/g, ' ')}`).join(', ')
+    : entries
+        .map(([key, n]) => {
+          // Problem kinds read as the health page words them ("no licence",
+          // "no preview"); anything else falls back to its key.
+          const label =
+            PROBLEM_META[key as keyof typeof PROBLEM_META]?.label ?? key.replace(/_/g, ' ')
+          return `${n.toLocaleString('en-GB')} ${label.toLowerCase()}`
+        })
+        .join(', ')
 }
 
-function Tile({
-  label,
-  value,
-  hint,
-  bad = false,
-}: {
-  label: string
-  value: string
-  hint?: string
-  bad?: boolean
-}) {
-  return (
-    <div
-      className={cn(
-        'rounded-[var(--radius-card)] border p-4',
-        bad
-          ? 'border-[var(--color-danger)] bg-[var(--color-danger-soft)] text-[var(--color-danger)]'
-          : 'border-[var(--color-border)] bg-[var(--color-surface)]',
-      )}
-    >
-      <span className="block text-xs opacity-80">{label}</span>
-      <span className="mt-1 block text-lg font-semibold leading-tight">{value}</span>
-      {hint && <span className="mt-0.5 block text-xs opacity-80">{hint}</span>}
-    </div>
-  )
-}
-
+/**
+ * One card of the report. `flush` lets a table run edge to edge under the
+ * title rather than sitting indented inside the card's padding.
+ */
 function Section({
   title,
   className,
+  flush = false,
+  footer,
   children,
 }: {
   title: string
   className?: string
+  flush?: boolean
+  footer?: string
   children: React.ReactNode
 }) {
   return (
-    <Card className={className}>
+    <Card className={cn(flush && 'overflow-hidden', className)}>
       <CardHeader>
         <CardTitle>{title}</CardTitle>
       </CardHeader>
-      <CardContent>{children}</CardContent>
+      {flush ? (
+        <div className="border-t border-[var(--color-border)]">{children}</div>
+      ) : (
+        <CardContent>{children}</CardContent>
+      )}
+      {footer && (
+        <p
+          className={cn(
+            'px-5 pb-4 text-xs text-[var(--color-ink-faint)]',
+            flush && 'border-t border-[var(--color-border)] pt-3',
+          )}
+        >
+          {footer}
+        </p>
+      )}
     </Card>
   )
 }
@@ -327,7 +341,8 @@ function Pairs({
   mono?: boolean
 }) {
   return (
-    <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
+    // One column on a phone: a long value gets the full width, not a sliver.
+    <dl className="grid gap-x-4 gap-y-1 text-sm sm:grid-cols-[auto_1fr]">
       {Object.entries(rows).map(([key, value]) => (
         <div key={key} className="contents">
           <dt

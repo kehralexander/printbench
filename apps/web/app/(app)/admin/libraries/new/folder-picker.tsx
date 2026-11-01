@@ -144,14 +144,16 @@ export function FolderPicker({
               <div className="flex flex-wrap items-center gap-1">
                 <span className="text-xs text-[var(--color-ink-faint)]">Jump to:</span>
                 {roots.map((root) => (
-                  <button
+                  <Button
                     key={root}
                     type="button"
+                    variant="ghost"
+                    size="sm"
                     onClick={() => void open(root)}
-                    className="rounded-full bg-[var(--color-surface-2)] px-2 py-0.5 font-mono text-xs text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
+                    className="font-mono text-xs"
                   >
                     {root}
-                  </button>
+                  </Button>
                 ))}
               </div>
             )}

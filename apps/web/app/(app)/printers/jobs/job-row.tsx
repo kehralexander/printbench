@@ -6,6 +6,7 @@ import { FolderPlus, X } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { ClockTime } from '@/components/ui/clock-time'
+import { PRINT_OUTCOME } from '@/lib/print-outcome'
 import { LinkPicker } from '../../queue/link-picker'
 import { addJobFileToModel, dismissPrinterJob, linkPrinterJob } from './actions'
 
@@ -22,13 +23,6 @@ export interface JobLine {
   fetchable: boolean
 }
 
-const OUTCOME: Record<JobLine['status'], { label: string; tone: 'accent' | 'danger' | 'neutral' }> =
-  {
-    success: { label: 'Printed', tone: 'accent' },
-    cancelled: { label: 'Cancelled', tone: 'neutral' },
-    failed: { label: 'Failed', tone: 'danger' },
-  }
-
 /** One printer job the library did not know, and what can be done about it. */
 export function JobRow({
   job,
@@ -44,7 +38,7 @@ export function JobRow({
   const [error, setError] = useState<string | null>(null)
   const [message, setMessage] = useState<string | null>(null)
   const name = job.filename.split('/').pop() ?? job.filename
-  const outcome = OUTCOME[job.status]
+  const outcome = PRINT_OUTCOME[job.status]
   const suggest = name.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ')
 
   function run(work: () => Promise<{ ok: true; message?: string } | { ok: false; error: string }>) {

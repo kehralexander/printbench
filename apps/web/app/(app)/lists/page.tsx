@@ -1,24 +1,38 @@
 import Link from 'next/link'
 import { Heart } from 'lucide-react'
-import { can, listLiked } from '@pb/core'
+import { can, listLiked, type LikedSort } from '@pb/core'
 import { getSessionUser } from '@pb/auth'
 import { getDb } from '@pb/db'
 import { PageHeader } from '@/components/shell/page-header'
 import { NotPermitted } from '@/components/shell/not-permitted'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Button } from '@/components/ui/button'
-import { ModelCard, formatDimensions } from '@/components/model/model-card'
+import { ListToolbar } from '@/components/ui/list-toolbar'
+import { UrlSortControl } from '@/components/ui/sort-control'
+import { ModelGrid } from '@/components/model/model-grid'
+import { pickSort, type SortOption } from '@/lib/sort'
 
 export const dynamic = 'force-dynamic'
 export const metadata = { title: 'Liked' }
 
-export default async function LikedPage() {
+const SORT_OPTIONS: SortOption<LikedSort>[] = [
+  { value: 'liked', label: 'Recently liked' },
+  { value: 'name', label: 'Name' },
+  { value: 'recent', label: 'Newest model' },
+]
+
+export default async function LikedPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>
+}) {
   const user = await getSessionUser()
   if (!user || !can({ id: user.id, role: user.role ?? null }, 'like:toggle')) {
     return <NotPermitted what="liked models" />
   }
 
-  const liked = await listLiked(getDb(), user.id)
+  const sort = pickSort((await searchParams).sort, SORT_OPTIONS, 'liked')
+  const liked = await listLiked(getDb(), user.id, { sort })
 
   return (
     <>
@@ -27,13 +41,13 @@ export default async function LikedPage() {
         description={
           liked.length === 0
             ? 'Models you have hearted appear here.'
-            : `${liked.length} model${liked.length === 1 ? '' : 's'}, most recent first`
+            : `${liked.length} model${liked.length === 1 ? '' : 's'}`
         }
       />
 
       {liked.length === 0 ? (
         <EmptyState
-          icon={<Heart className="size-6" />}
+          icon={<Heart />}
           title="Nothing liked yet"
           description="Press the heart on any model to keep it here. Only you can see this list."
           action={
@@ -43,25 +57,19 @@ export default async function LikedPage() {
           }
         />
       ) : (
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 xl:grid-cols-4">
-          {liked.map((model) => (
-            <ModelCard
-              key={model.id}
-              publicId={model.publicId}
-              name={model.name}
-              path={model.path}
-              fileCount={model.fileCount}
-              totalSize={model.totalSize}
-              libraryName={model.libraryName}
-              isPackage={model.isPackage}
-              previewExtension={model.previewExtension}
-              previewImageFileId={model.previewImageFileId}
-              thumbFileId={model.thumbFileId}
-              thumbKey={model.thumbKey}
-              dimensions={formatDimensions(model.bboxX ?? 0, model.bboxY ?? 0, model.bboxZ ?? 0)}
-            />
-          ))}
-        </div>
+        <>
+          <ListToolbar
+            sort={
+              <UrlSortControl
+                options={SORT_OPTIONS}
+                value={sort}
+                defaultValue="liked"
+                count={liked.length}
+              />
+            }
+          />
+          <ModelGrid models={liked} />
+        </>
       )}
     </>
   )

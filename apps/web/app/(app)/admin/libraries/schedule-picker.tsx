@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { CalendarClock, Check, Loader2 } from 'lucide-react'
 import { SCHEDULE_PRESETS } from '@pb/core/schedule'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { updateLibrarySchedule, updateLibraryWatch } from './actions'
@@ -78,29 +79,28 @@ export function SchedulePicker({
 
   if (!open) {
     return (
-      <button
+      <Button
         type="button"
+        variant="ghost"
+        size="sm"
         onClick={() => setOpen(true)}
-        className="flex items-center gap-1.5 text-xs text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
+        // Pulled left so the label still lines up with the text above it.
+        className="-ml-3 gap-1.5 text-xs"
       >
-        <CalendarClock className="size-3.5" />
+        <CalendarClock />
         {enabled ? label : 'Scanning off'}
         {enabled && nextRunLabel && (
           <span className="text-[var(--color-ink-faint)]">· next {nextRunLabel}</span>
         )}
         {watching && <span className="text-[var(--color-ink-faint)]">· watching live</span>}
-      </button>
+      </Button>
     )
   }
 
   return (
     <div className="w-full space-y-2 rounded-[var(--radius-control)] border border-[var(--color-border)] p-3">
       <label className="flex items-center gap-2 text-sm">
-        <input
-          type="checkbox"
-          checked={scanEnabled}
-          onChange={(e) => setScanEnabled(e.target.checked)}
-        />
+        <Checkbox checked={scanEnabled} onChange={(e) => setScanEnabled(e.target.checked)} />
         Scan this library
       </label>
 
@@ -144,8 +144,7 @@ export function SchedulePicker({
 
       {watchable && (
         <label className="flex items-start gap-2 border-t border-[var(--color-border)] pt-2 text-sm">
-          <input
-            type="checkbox"
+          <Checkbox
             className="mt-0.5"
             checked={watchEnabled}
             onChange={(e) => setWatchEnabled(e.target.checked)}

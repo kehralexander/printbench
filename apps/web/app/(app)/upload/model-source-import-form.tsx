@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { CardDescription, CardTitle } from '@/components/ui/card'
 import {
   pollMakerWorldImport,
   startModelSourceImport,
@@ -99,12 +100,10 @@ export function ModelSourceImportForm({
   return (
     <section aria-labelledby="model-sources-heading" className="space-y-3">
       <div>
-        <h2 id="model-sources-heading" className="text-lg font-semibold">
-          Import a model link
-        </h2>
-        <p className="mt-1 text-sm text-[var(--color-ink-muted)]">
+        <CardTitle id="model-sources-heading">Import a model link</CardTitle>
+        <CardDescription className="mt-1">
           Bring files and details from MakerWorld, Printables, or Thingiverse.
-        </p>
+        </CardDescription>
       </div>
       <form
         className="space-y-3"
@@ -152,7 +151,7 @@ export function ModelSourceImportForm({
               : saved
                 ? 'MakerWorld connection saved.'
                 : 'Connect your Bambu account to download MakerWorld print profiles.')}{' '}
-          <Link href="/settings#makerworld" className="underline">
+          <Link href="/settings#makerworld" className="text-[var(--color-accent)] hover:underline">
             {saved ? 'Manage connection' : 'Set up MakerWorld'}
           </Link>
         </p>
@@ -169,7 +168,7 @@ export function ModelSourceImportForm({
             : thingiverseSaved
               ? 'Thingiverse API token saved.'
               : 'Thingiverse needs an API token.'}{' '}
-          <Link href="/settings#thingiverse" className="underline">
+          <Link href="/settings#thingiverse" className="text-[var(--color-accent)] hover:underline">
             {thingiverseSaved ? 'Manage connection' : 'Set up Thingiverse'}
           </Link>
         </p>
@@ -186,7 +185,10 @@ export function ModelSourceImportForm({
           <p>
             Import complete.{' '}
             {status.publicId && (
-              <Link className="underline" href={`/models/${encodeURIComponent(status.publicId)}`}>
+              <Link
+                className="text-[var(--color-accent)] hover:underline"
+                href={`/models/${encodeURIComponent(status.publicId)}`}
+              >
                 Open model
               </Link>
             )}

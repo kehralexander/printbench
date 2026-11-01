@@ -1,3 +1,4 @@
+import * as React from 'react'
 import Link from 'next/link'
 import type { Route } from 'next'
 import { ClipboardList } from 'lucide-react'
@@ -20,15 +21,20 @@ import {
 import { getSessionUser } from '@pb/auth'
 import { getDb } from '@pb/db'
 import { filamentOptions } from '@/lib/filament-options'
-import { PageHeader } from '@/components/shell/page-header'
 import { NotPermitted } from '@/components/shell/not-permitted'
+import { NextUpHint } from '@/components/printer/next-up-hint'
+import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { ClockTime } from '@/components/ui/clock-time'
 import { EmptyState } from '@/components/ui/empty-state'
+import { FilterTabs } from '@/components/ui/filter-tabs'
+import { UrlSortControl } from '@/components/ui/sort-control'
+import { pickSort } from '@/lib/sort'
 import { AddRequests } from './add-requests'
 import { QueueList } from './queue-list'
 import { ResetOrder } from './reset-order'
 import type { NextHint, QueueRow, SendTarget, SpoolBadge, SpoolShortfall } from './request-row'
+import { QUEUE_SORTS } from './sort'
 
 export const dynamic = 'force-dynamic'
 export const metadata = { title: 'Print queue' }
@@ -44,7 +50,7 @@ const FILTERS: { key: string; label: string; status?: PrintRequestStatus[] }[] =
 export default async function QueuePage({
   searchParams,
 }: {
-  searchParams: Promise<{ filter?: string }>
+  searchParams: Promise<{ filter?: string; sort?: string }>
 }) {
   const user = await getSessionUser()
   const policyUser = { id: user?.id ?? '', role: user?.role ?? null }
@@ -55,18 +61,21 @@ export default async function QueuePage({
 
   const params = await searchParams
   const filter = FILTERS.find((option) => option.key === params.filter) ?? FILTERS[0]!
+  // Anything but the queue's own order is only a way of looking at it.
+  const sort = pickSort(params.sort, QUEUE_SORTS, 'manual')
+  const manual = sort === 'manual'
 
   const db = getDb()
   const [requests, stats, requesters, filaments, printers] = await Promise.all([
-    listRequests(db, { status: filter.status, limit: 200 }),
+    listRequests(db, { status: filter.status, limit: 200, sort }),
     queueStats(db),
     requesterSuggestions(db),
     filamentOptions(db),
     printerSnapshots(db),
   ])
-  // The look-ahead needs the open queue whatever the filter shows.
+  // The look-ahead needs the open queue, in queue order, whatever the view.
   const open =
-    filter.key === 'open'
+    filter.key === 'open' && manual
       ? requests
       : await listRequests(db, { status: ['requested', 'printing'], limit: 200 })
 
@@ -191,75 +200,63 @@ export default async function QueuePage({
     mine: request.createdBy === user.id,
   }))
 
+  // Idle printers whose next print no queue row already announces: nothing
+  // loaded matches, or the most urgent request needs a different filament.
+  const idleNotes = canRun ? hints.filter((hint) => !hint.ready || hint.swap) : []
+  const sortLabel = QUEUE_SORTS.find((option) => option.value === sort)!.label
+  const withSort = (query: Record<string, string>) => {
+    const search = new URLSearchParams(query)
+    if (!manual) search.set('sort', sort)
+    return `/queue?${search.toString()}`
+  }
+
   return (
     <>
-      <PageHeader
+      <AddRequests
         title="Print queue"
         description={empty ? 'Things people have asked you to print.' : summarise(stats)}
+        requesterSuggestions={requesters}
+        filaments={filaments}
       />
-      {stats.remainingMin > 0 && (
-        <p className="-mt-5 mb-6 text-sm text-[var(--color-ink-muted)]">
-          All done around <ClockTime value={finishTime(stats.remainingMin)} />
-          {stats.unestimated > 0 && ', plus whatever has no estimate'}
-        </p>
-      )}
 
-      <div className="mb-4">
-        <AddRequests requesterSuggestions={requesters} filaments={filaments} />
-      </div>
-
-      {canRun && (hints.length > 0 || forecast.length > 0) && (
-        <Card className="mb-4 space-y-1.5 p-3 text-sm">
-          {hints.map((hint) => (
-            <p key={hint.printerId}>
-              <span className="font-medium">{hint.printerName} is idle.</span>{' '}
-              {hint.ready ? (
-                <>
-                  Ready to start: {hint.ready.request.title}
-                  {hint.ready.slot && ` (slot ${hint.ready.slot.index + 1})`}.
-                </>
-              ) : (
-                'Nothing queued matches what it has loaded.'
-              )}
-              {hint.swap && (
-                <span className="text-[var(--color-ink-muted)]">
-                  {' '}
-                  Most urgent is {hint.swap.request.title}: load {hint.swap.filament}.
-                </span>
-              )}
-            </p>
+      {idleNotes.length > 0 && (
+        <div className="mb-4 space-y-2">
+          {idleNotes.map((hint) => (
+            <NextUpHint
+              key={hint.printerId}
+              hint={hint}
+              printerName={hint.printerName}
+              showReady={false}
+            />
           ))}
-          {forecast.map((spool) => (
-            <p key={spool.spoolId} className="text-[var(--color-danger)]">
-              {spoolLabel(spool.spoolId)} runs out after {spool.runsOutAfter} of the {spool.prints}{' '}
-              queued prints on it (needs ~{spool.neededG} g, {Math.round(spool.remainingG)} g left).
-            </p>
-          ))}
-        </Card>
+        </div>
       )}
 
       {!empty && (
-        <nav className="mb-4 flex flex-wrap items-center gap-1.5">
-          {FILTERS.map((option) => (
-            <Link
-              key={option.key}
-              href={`/queue?filter=${option.key}` as Route}
-              aria-current={option.key === filter.key ? 'page' : undefined}
-              className={
-                option.key === filter.key
-                  ? 'rounded-full bg-[var(--color-accent-soft)] px-3 py-1 text-sm font-medium text-[var(--color-accent)]'
-                  : 'rounded-full px-3 py-1 text-sm text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-2)]'
-              }
-            >
-              {option.label}
-            </Link>
-          ))}
-          {canRun && manualOrder && filter.key === 'open' && (
-            <span className="ml-auto">
-              <ResetOrder />
-            </span>
-          )}
-        </nav>
+        <FilterTabs
+          options={FILTERS.map((option) => ({
+            key: option.key,
+            label: option.label,
+            href: withSort({ filter: option.key }),
+          }))}
+          current={filter.key}
+          trailing={
+            <>
+              {canRun && filter.key === 'open' && !manual && (
+                <span className="text-xs text-[var(--color-ink-faint)]">
+                  Sorted by {sortLabel.toLowerCase()} — switch to Manual to drag
+                </span>
+              )}
+              {canRun && manual && manualOrder && filter.key === 'open' && <ResetOrder />}
+              <UrlSortControl
+                options={QUEUE_SORTS}
+                value={sort}
+                defaultValue="manual"
+                count={rows.length}
+              />
+            </>
+          }
+        />
       )}
 
       {rows.length === 0 ? (
@@ -269,7 +266,7 @@ export default async function QueuePage({
          * would simply be wrong.
          */
         <EmptyState
-          icon={<ClipboardList className="size-6" />}
+          icon={<ClipboardList />}
           title={empty ? 'Nothing in the queue' : `Nothing ${filter.label.toLowerCase()}`}
           description={
             empty
@@ -278,12 +275,9 @@ export default async function QueuePage({
           }
           action={
             empty ? undefined : (
-              <Link
-                href={'/queue' as Route}
-                className="text-sm text-[var(--color-accent)] hover:underline"
-              >
-                Show everything
-              </Link>
+              <Button asChild variant="secondary">
+                <Link href={withSort({ filter: 'all' }) as Route}>Show everything</Link>
+              </Button>
             )
           }
         />
@@ -294,22 +288,11 @@ export default async function QueuePage({
             canRun={canRun}
             filaments={filaments}
             sendTargets={sendTargets}
-            sortable={canRun && filter.key === 'open' && rows.length > 1}
+            sortable={canRun && manual && filter.key === 'open' && rows.length > 1}
           />
         </Card>
       )}
     </>
-  )
-}
-
-function spoolLabel(spoolId: number) {
-  const url = spoolmanSpoolLink(spoolId)
-  return url ? (
-    <a href={url} target="_blank" rel="noreferrer" className="underline">
-      Spool #{spoolId}
-    </a>
-  ) : (
-    `Spool #${spoolId}`
   )
 }
 
@@ -325,20 +308,29 @@ function summarise(stats: {
   overdue: number
   remainingMin: number
   unestimated: number
-}): string {
-  const parts: string[] = []
+}): React.ReactNode {
+  const parts: React.ReactNode[] = []
   if (stats.waiting > 0) parts.push(`${stats.waiting} waiting`)
   if (stats.printing > 0) parts.push(`${stats.printing} on the printer`)
   if (stats.remainingMin > 0) {
     // Said outright when it is a floor rather than a total.
     parts.push(
-      `~${formatEstimate(stats.remainingMin)} of printing` +
-        (stats.unestimated > 0 ? ` (+${stats.unestimated} without an estimate)` : ''),
+      <>
+        ~{formatEstimate(stats.remainingMin)} of printing, all done around{' '}
+        <ClockTime value={finishTime(stats.remainingMin)} />
+        {stats.unestimated > 0 && ` (+${stats.unestimated} without an estimate)`}
+      </>,
     )
   }
   if (stats.overdue > 0) parts.push(`${stats.overdue} overdue`)
   if (stats.done > 0) parts.push(`${stats.done} printed`)
 
   // Everything is closed: the queue is clear, which is worth saying outright.
-  return parts.length > 0 ? parts.join(' · ') : 'Nothing waiting. The queue is clear.'
+  if (parts.length === 0) return 'Nothing waiting. The queue is clear.'
+  return parts.map((part, index) => (
+    <React.Fragment key={index}>
+      {index > 0 && ' · '}
+      {part}
+    </React.Fragment>
+  ))
 }

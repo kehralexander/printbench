@@ -442,7 +442,21 @@ export interface UnmatchedJob {
  * Finished jobs whose file matched nothing in the library — started from the
  * printer's screen, or sent straight from a slicer — and not waved off.
  */
-export async function unmatchedJobs(db: Database, limit = 100): Promise<UnmatchedJob[]> {
+export type UnmatchedJobSort = 'newest' | 'oldest' | 'printer' | 'filename'
+
+const UNMATCHED_ORDER: Record<UnmatchedJobSort, ReturnType<typeof sql>> = {
+  newest: sql`ORDER BY j.started_at DESC`,
+  oldest: sql`ORDER BY j.started_at ASC`,
+  printer: sql`ORDER BY lower(h.name) ASC, j.started_at DESC`,
+  // The file's own name, not the folder it sits in on the printer.
+  filename: sql`ORDER BY lower(regexp_replace(j.filename, '^.*/', '')) ASC, j.started_at DESC`,
+}
+
+export async function unmatchedJobs(
+  db: Database,
+  limit = 100,
+  sort: UnmatchedJobSort = 'newest',
+): Promise<UnmatchedJob[]> {
   const rows = await db.execute<{
     id: string
     host_id: string
@@ -458,7 +472,7 @@ export async function unmatchedJobs(db: Database, limit = 100): Promise<Unmatche
            j.print_sec, j.started_at, j.finished_at
     FROM printer_jobs j JOIN print_hosts h ON h.id = j.host_id
     WHERE j.model_id IS NULL AND j.finished_at IS NOT NULL AND j.dismissed_at IS NULL
-    ORDER BY j.started_at DESC
+    ${UNMATCHED_ORDER[sort]}
     LIMIT ${Math.min(Math.max(limit, 1), 500)}`)
   return rows.rows.map((row) => ({
     id: row.id,

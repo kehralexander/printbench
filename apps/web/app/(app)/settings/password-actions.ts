@@ -3,6 +3,7 @@
 import { headers } from 'next/headers'
 import { getAuth, requireUser } from '@pb/auth'
 import { audit } from '@/lib/audit'
+import { MAX_PASSWORD, MIN_PASSWORD } from '@/lib/password'
 
 export async function changeOwnPassword(input: {
   currentPassword: string
@@ -11,8 +12,11 @@ export async function changeOwnPassword(input: {
   try {
     const user = await requireUser()
     if (user.banned) return { ok: false, error: 'Not permitted.' }
-    if (input.newPassword.length < 10 || input.newPassword.length > 200) {
-      return { ok: false, error: 'Use a password between 10 and 200 characters.' }
+    if (input.newPassword.length < MIN_PASSWORD || input.newPassword.length > MAX_PASSWORD) {
+      return {
+        ok: false,
+        error: `Use a password between ${MIN_PASSWORD} and ${MAX_PASSWORD} characters.`,
+      }
     }
     await getAuth().api.changePassword({
       headers: await headers(),

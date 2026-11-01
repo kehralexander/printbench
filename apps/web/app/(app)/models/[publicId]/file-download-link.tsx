@@ -1,4 +1,5 @@
 import { Download } from 'lucide-react'
+import { Button } from '@/components/ui/button'
 
 /**
  * Downloads a single file.
@@ -10,14 +11,16 @@ import { Download } from 'lucide-react'
  * deployments.
  */
 export function FileDownloadLink({ fileId, filename }: { fileId: string; filename: string }) {
+  // The same ghost icon button as every other row action.
   return (
-    <a
-      href={`/api/files/${fileId}/raw`}
-      title={`Download ${filename}`}
-      aria-label={`Download ${filename}`}
-      className="shrink-0 rounded p-1 text-[var(--color-ink-faint)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-ink)]"
-    >
-      <Download className="size-3.5" />
-    </a>
+    <Button asChild variant="ghost" size="icon" className="shrink-0">
+      <a
+        href={`/api/files/${fileId}/raw`}
+        title={`Download ${filename}`}
+        aria-label={`Download ${filename}`}
+      >
+        <Download />
+      </a>
+    </Button>
   )
 }

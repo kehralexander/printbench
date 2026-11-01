@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation'
 import type { Filament, Spool } from '@pb/core'
 import type { FilamentInput, SpoolInput } from '@pb/core/filaments'
 import { Button } from '@/components/ui/button'
+import { Dialog, DialogContent } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { Field } from '@/components/ui/field'
@@ -161,128 +162,127 @@ export function SpoolForm({
     })
   }
   return (
-    <form
-      onSubmit={submit}
-      className="space-y-4 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface)] p-4"
-    >
-      <h2 className="font-semibold">
-        {editing ? 'Edit spool' : duplicate ? 'Duplicate spool' : 'Add spool'}
-      </h2>
-      {!editing && (
-        <Field label="Filament" htmlFor="spool-filament">
-          <Select
-            id="spool-filament"
-            value={filamentId}
-            onChange={(e) => setFilamentId(e.target.value)}
-          >
-            <option value="">Create new filament…</option>
-            {filaments
-              .filter((f) => !f.archived)
-              .map((f) => (
-                <option key={f.id} value={f.id}>
-                  {[f.brand, f.name, f.colorName].filter(Boolean).join(' · ')}
-                </option>
-              ))}
-          </Select>
-        </Field>
-      )}
-      {!filamentId && <FilamentFields />}
-      <div className="grid gap-3 sm:grid-cols-2">
-        <Field label="Spool label" htmlFor="spool-label">
-          <Input
-            id="spool-label"
-            name="label"
-            defaultValue={duplicate ? '' : (initial?.label ?? '')}
-            placeholder="Roll 2"
-          />
-        </Field>
-        <Field label="Nominal filament weight (g)" htmlFor="spool-nominal">
-          <Input
-            id="spool-nominal"
-            name="nominalWeightG"
-            type="number"
-            min="0.01"
-            step="0.01"
-            required
-            defaultValue={initial?.nominalWeightG ?? 1000}
-          />
-        </Field>
-        {!editing && (
-          <Field
-            label="Starting filament remaining (g)"
-            htmlFor="spool-remaining"
-            hint={
-              duplicate
-                ? 'Enter the starting weight of this new roll.'
-                : 'For a partially used roll, enter what is left.'
-            }
-          >
-            <Input
-              id="spool-remaining"
-              name="remainingG"
-              type="number"
-              min="0"
-              step="0.01"
-              required
-              defaultValue={duplicate ? undefined : 1000}
-            />
-          </Field>
-        )}
-        <Field label="Empty spool weight (g)" htmlFor="spool-empty">
-          <Input
-            id="spool-empty"
-            name="emptyWeightG"
-            type="number"
-            min="0"
-            step="0.01"
-            defaultValue={initial?.emptyWeightG ?? ''}
-          />
-        </Field>
-        <Field label="Purchase cost" htmlFor="spool-cost">
-          <Input
-            id="spool-cost"
-            name="purchaseCost"
-            type="number"
-            min="0"
-            step="0.01"
-            defaultValue={initial?.purchaseCost ?? ''}
-          />
-        </Field>
-        <Field label="Storage location" htmlFor="spool-location">
-          <Input
-            id="spool-location"
-            name="location"
-            defaultValue={initial?.location ?? ''}
-            placeholder="Dry box 1"
-          />
-        </Field>
-        <Field label="Low stock threshold (g)" htmlFor="spool-low">
-          <Input
-            id="spool-low"
-            name="lowStockG"
-            type="number"
-            min="0"
-            step="0.01"
-            required
-            defaultValue={initial?.lowStockG ?? 100}
-          />
-        </Field>
-        <Field label="Spool notes" htmlFor="spool-notes">
-          <Input id="spool-notes" name="notes" defaultValue={initial?.notes ?? ''} />
-        </Field>
-      </div>
-      {error && (
-        <p role="alert" className="text-sm text-[var(--color-danger)]">
-          {error}
-        </p>
-      )}
-      <div className="flex gap-2">
-        <Button disabled={pending}>{pending ? 'Saving…' : 'Save spool'}</Button>
-        <Button type="button" variant="secondary" disabled={pending} onClick={onCancel}>
-          Cancel
-        </Button>
-      </div>
-    </form>
+    // A dialog, like every other create or edit form; mounted while open.
+    <Dialog open onOpenChange={(open) => !open && onCancel()}>
+      <DialogContent title={editing ? 'Edit spool' : duplicate ? 'Duplicate spool' : 'Add spool'}>
+        <form onSubmit={submit} className="space-y-4">
+          {!editing && (
+            <Field label="Filament" htmlFor="spool-filament">
+              <Select
+                id="spool-filament"
+                value={filamentId}
+                onChange={(e) => setFilamentId(e.target.value)}
+              >
+                <option value="">Create new filament…</option>
+                {filaments
+                  .filter((f) => !f.archived)
+                  .map((f) => (
+                    <option key={f.id} value={f.id}>
+                      {[f.brand, f.name, f.colorName].filter(Boolean).join(' · ')}
+                    </option>
+                  ))}
+              </Select>
+            </Field>
+          )}
+          {!filamentId && <FilamentFields />}
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="Spool label" htmlFor="spool-label">
+              <Input
+                id="spool-label"
+                name="label"
+                defaultValue={duplicate ? '' : (initial?.label ?? '')}
+                placeholder="Roll 2"
+              />
+            </Field>
+            <Field label="Nominal filament weight (g)" htmlFor="spool-nominal">
+              <Input
+                id="spool-nominal"
+                name="nominalWeightG"
+                type="number"
+                min="0.01"
+                step="0.01"
+                required
+                defaultValue={initial?.nominalWeightG ?? 1000}
+              />
+            </Field>
+            {!editing && (
+              <Field
+                label="Starting filament remaining (g)"
+                htmlFor="spool-remaining"
+                hint={
+                  duplicate
+                    ? 'Enter the starting weight of this new roll.'
+                    : 'For a partially used roll, enter what is left.'
+                }
+              >
+                <Input
+                  id="spool-remaining"
+                  name="remainingG"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  required
+                  defaultValue={duplicate ? undefined : 1000}
+                />
+              </Field>
+            )}
+            <Field label="Empty spool weight (g)" htmlFor="spool-empty">
+              <Input
+                id="spool-empty"
+                name="emptyWeightG"
+                type="number"
+                min="0"
+                step="0.01"
+                defaultValue={initial?.emptyWeightG ?? ''}
+              />
+            </Field>
+            <Field label="Purchase cost" htmlFor="spool-cost">
+              <Input
+                id="spool-cost"
+                name="purchaseCost"
+                type="number"
+                min="0"
+                step="0.01"
+                defaultValue={initial?.purchaseCost ?? ''}
+              />
+            </Field>
+            <Field label="Storage location" htmlFor="spool-location">
+              <Input
+                id="spool-location"
+                name="location"
+                defaultValue={initial?.location ?? ''}
+                placeholder="Dry box 1"
+              />
+            </Field>
+            <Field label="Low stock threshold (g)" htmlFor="spool-low">
+              <Input
+                id="spool-low"
+                name="lowStockG"
+                type="number"
+                min="0"
+                step="0.01"
+                required
+                defaultValue={initial?.lowStockG ?? 100}
+              />
+            </Field>
+            <Field label="Spool notes" htmlFor="spool-notes">
+              <Input id="spool-notes" name="notes" defaultValue={initial?.notes ?? ''} />
+            </Field>
+          </div>
+          {error && (
+            <p role="alert" className="text-sm text-[var(--color-danger)]">
+              {error}
+            </p>
+          )}
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="ghost" disabled={pending} onClick={onCancel}>
+              Cancel
+            </Button>
+            <Button disabled={pending}>{pending ? 'Saving…' : 'Save spool'}</Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
   )
 }
 export function EditFilamentForm({
@@ -296,35 +296,41 @@ export function EditFilamentForm({
   const [pending, startTransition] = useTransition()
   const [error, setError] = useState<string | null>(null)
   return (
-    <form
-      className="space-y-4 rounded-[var(--radius-card)] border border-[var(--color-border)] p-4"
-      onSubmit={(e) => {
-        e.preventDefault()
-        const data = new FormData(e.currentTarget)
-        startTransition(async () => {
-          const result = await saveFilament(filament.id, filamentInput(data))
-          if (!result.ok) {
-            setError(result.error)
-            return
-          }
-          router.refresh()
-          onCancel()
-        })
-      }}
-    >
-      <h2 className="font-semibold">Edit filament details</h2>
-      <p className="text-sm text-[var(--color-ink-muted)]">
-        These details apply to every spool of this filament. Historical print details stay as
-        recorded.
-      </p>
-      <FilamentFields initial={filament} />
-      {error && <p role="alert">{error}</p>}
-      <div className="flex gap-2">
-        <Button disabled={pending}>Save filament</Button>
-        <Button variant="secondary" type="button" onClick={onCancel}>
-          Cancel
-        </Button>
-      </div>
-    </form>
+    <Dialog open onOpenChange={(open) => !open && onCancel()}>
+      <DialogContent
+        title="Edit filament details"
+        description="These details apply to every spool of this filament. Historical print details stay as recorded."
+      >
+        <form
+          className="space-y-4"
+          onSubmit={(e) => {
+            e.preventDefault()
+            const data = new FormData(e.currentTarget)
+            startTransition(async () => {
+              const result = await saveFilament(filament.id, filamentInput(data))
+              if (!result.ok) {
+                setError(result.error)
+                return
+              }
+              router.refresh()
+              onCancel()
+            })
+          }}
+        >
+          <FilamentFields initial={filament} />
+          {error && (
+            <p role="alert" className="text-sm text-[var(--color-danger)]">
+              {error}
+            </p>
+          )}
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" type="button" onClick={onCancel}>
+              Cancel
+            </Button>
+            <Button disabled={pending}>Save filament</Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
   )
 }

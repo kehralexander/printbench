@@ -1,7 +1,10 @@
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import { getSessionUser, OIDC_PROVIDER_ID, SSO_NOT_ALLOWED, ssoProviderName } from '@pb/auth'
+import { getSetting } from '@pb/core'
+import { getDb } from '@pb/db'
 import { needsFirstRunSetup } from '@/lib/setup'
+import { AuthHeader } from '@/components/auth/auth-header'
 import { LoginForm } from './login-form'
 import { SsoButton } from './sso-button'
 
@@ -22,25 +25,24 @@ function ssoErrorMessage(code: string | undefined, provider: string): string | n
 export default async function LoginPage({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string }>
+  searchParams: Promise<{ error?: string; password?: string }>
 }) {
   // A brand-new instance has no account to sign in to; send them to setup.
   if (await needsFirstRunSetup()) redirect('/setup')
   if (await getSessionUser()) redirect('/')
 
+  const params = await searchParams
   const sso = ssoProviderName()
-  const ssoError = sso ? ssoErrorMessage((await searchParams).error, sso) : null
+  const ssoError = sso ? ssoErrorMessage(params.error, sso) : null
+  // ?password=1 keeps the form reachable, so a broken identity provider cannot lock admins out.
+  const passwordHidden =
+    Boolean(sso) && (await getSetting(getDb(), 'hidePasswordLogin')) && params.password !== '1'
 
   return (
     <>
-      <div className="mb-6">
-        <h1 className="text-2xl font-semibold tracking-tight">Welcome back</h1>
-        <p className="mt-1 text-sm text-[var(--color-ink-muted)]">
-          Sign in to browse your print library.
-        </p>
-      </div>
+      <AuthHeader title="Welcome back" description="Sign in to browse your print library." />
       {sso && (
-        <div className="mb-6 space-y-2">
+        <div className={passwordHidden ? 'space-y-2' : 'mb-6 space-y-2'}>
           <SsoButton providerId={OIDC_PROVIDER_ID} name={sso} />
           {ssoError && (
             <p role="alert" className="text-sm text-[var(--color-danger)]">
@@ -49,19 +51,28 @@ export default async function LoginPage({
           )}
         </div>
       )}
-      <LoginForm />
-      <p className="mt-4 text-sm">
-        <Link href="/forgot-password" className="text-[var(--color-accent)] hover:underline">
-          Forgot password?
-        </Link>
-      </p>
+      {!passwordHidden && (
+        <>
+          <LoginForm />
+          <p className="mt-4 text-sm">
+            <Link href="/forgot-password" className="text-[var(--color-accent)] hover:underline">
+              Forgot password?
+            </Link>
+          </p>
+        </>
+      )}
       <p className="mt-6 text-xs text-[var(--color-ink-faint)]">
-        No account?{' '}
-        <Link href="/" className="text-[var(--color-accent)] hover:underline">
-          Ask an admin to invite you
-        </Link>
-        .
+        No account? Ask an admin to invite you.
       </p>
+      {passwordHidden && (
+        <p className="mt-2 text-xs text-[var(--color-ink-faint)]">
+          Admins can still{' '}
+          <Link href="/login?password=1" className="hover:underline">
+            sign in with a password
+          </Link>
+          .
+        </p>
+      )}
     </>
   )
 }

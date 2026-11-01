@@ -17,9 +17,11 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { EmptyState } from '@/components/ui/empty-state'
-import { Input } from '@/components/ui/input'
-import { Select } from '@/components/ui/select'
+import { ListToolbar } from '@/components/ui/list-toolbar'
 import { LocalTime } from '@/components/ui/local-time'
+import { UrlSortControl } from '@/components/ui/sort-control'
+import { pickSort, type SortOption } from '@/lib/sort'
+import { FilterBar, Pager } from '../filter-bar'
 
 export const dynamic = 'force-dynamic'
 export const metadata = { title: 'Audit trail' }
@@ -31,7 +33,14 @@ interface Params {
   outcome?: string
   q?: string
   page?: string
+  sort?: string
 }
+
+type AuditSort = 'newest' | 'oldest'
+const SORTS: readonly SortOption<AuditSort>[] = [
+  { value: 'newest', label: 'Newest' },
+  { value: 'oldest', label: 'Oldest' },
+]
 
 export default async function AuditPage({ searchParams }: { searchParams: Promise<Params> }) {
   if (!(await diagnosticsUser())) return <NotPermitted what="the audit trail" />
@@ -45,6 +54,7 @@ export default async function AuditPage({ searchParams }: { searchParams: Promis
     params.outcome === 'failure' || params.outcome === 'success' ? params.outcome : undefined
   const query = params.q?.trim().slice(0, 200) || undefined
   const page = Math.max(1, Math.floor(Number(params.page)) || 1)
+  const sort = pickSort(params.sort, SORTS, 'newest')
 
   const { events, total } = await listAuditEvents(getDb(), {
     category,
@@ -52,6 +62,7 @@ export default async function AuditPage({ searchParams }: { searchParams: Promis
     query,
     limit: PAGE_SIZE,
     offset: (page - 1) * PAGE_SIZE,
+    order: sort,
   })
 
   const filters = {
@@ -60,9 +71,12 @@ export default async function AuditPage({ searchParams }: { searchParams: Promis
     ...(query ? { q: query } : {}),
   }
   const filtered = Object.keys(filters).length > 0
+  // The sort survives filtering and paging; filters survive sorting.
+  const keep: Record<string, string> = sort === 'newest' ? {} : { sort }
   const pageHref = (target: number) =>
-    `/admin/health/audit?${new URLSearchParams({ ...filters, page: String(target) })}` as Route
+    `/admin/health/audit?${new URLSearchParams({ ...filters, ...keep, page: String(target) })}`
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE))
+  const [back, onwards] = sort === 'newest' ? ['Newer', 'Older'] : ['Older', 'Newer']
 
   return (
     <>
@@ -70,8 +84,8 @@ export default async function AuditPage({ searchParams }: { searchParams: Promis
         title="Audit trail"
         description={
           total === 0 && !filtered
-            ? 'A record of sign-ins and changes, newest first.'
-            : `${total.toLocaleString('en-GB')} event${total === 1 ? '' : 's'}${filtered ? ' matching' : ''}, newest first.`
+            ? 'A record of sign-ins and changes.'
+            : `A record of sign-ins and changes · ${total.toLocaleString('en-GB')} event${total === 1 ? '' : 's'}${filtered ? ' matching' : ''}`
         }
         actions={
           <Button asChild variant="secondary" size="sm">
@@ -83,42 +97,42 @@ export default async function AuditPage({ searchParams }: { searchParams: Promis
         }
       />
 
-      <form method="get" className="mb-4 flex flex-wrap items-end gap-2">
-        <div className="w-44">
-          <Select name="category" defaultValue={category ?? ''} aria-label="Category">
-            <option value="">Everything</option>
-            {Object.entries(AUDIT_CATEGORIES).map(([key, label]) => (
-              <option key={key} value={key}>
-                {label}
-              </option>
-            ))}
-          </Select>
-        </div>
-        <div className="w-40">
-          <Select name="outcome" defaultValue={outcome ?? ''} aria-label="Outcome">
-            <option value="">Any outcome</option>
-            <option value="success">Succeeded</option>
-            <option value="failure">Failed or refused</option>
-          </Select>
-        </div>
-        <div className="min-w-48 flex-1">
-          <Input
-            name="q"
-            type="search"
-            defaultValue={query ?? ''}
-            placeholder="Search by person, item or IP address"
-            aria-label="Search the audit trail"
-          />
-        </div>
-        <Button type="submit" variant="secondary">
-          Filter
-        </Button>
-        {filtered && (
-          <Button asChild variant="ghost">
-            <Link href="/admin/health/audit">Clear</Link>
-          </Button>
-        )}
-      </form>
+      <ListToolbar
+        sort={<UrlSortControl options={SORTS} value={sort} defaultValue="newest" count={total} />}
+      >
+        <FilterBar
+          keep={keep}
+          clearHref={
+            filtered ? `/admin/health/audit${sort === 'newest' ? '' : `?sort=${sort}`}` : undefined
+          }
+          selects={[
+            {
+              name: 'category',
+              label: 'Category',
+              value: category ?? '',
+              options: [
+                { value: '', label: 'Everything' },
+                ...Object.entries(AUDIT_CATEGORIES).map(([value, label]) => ({ value, label })),
+              ],
+            },
+            {
+              name: 'outcome',
+              label: 'Outcome',
+              value: outcome ?? '',
+              options: [
+                { value: '', label: 'Any outcome' },
+                { value: 'success', label: 'Succeeded' },
+                { value: 'failure', label: 'Failed or refused' },
+              ],
+            },
+          ]}
+          search={{
+            label: 'Search the audit trail',
+            placeholder: 'Search by person, item or IP address',
+            value: query ?? '',
+          }}
+        />
+      </ListToolbar>
 
       {events.length === 0 ? (
         <EmptyState
@@ -139,25 +153,11 @@ export default async function AuditPage({ searchParams }: { searchParams: Promis
       )}
 
       {pages > 1 && (
-        <nav className="mt-4 flex items-center justify-between text-sm" aria-label="Pages">
-          {page > 1 ? (
-            <Button asChild variant="secondary" size="sm">
-              <Link href={pageHref(page - 1)}>Newer</Link>
-            </Button>
-          ) : (
-            <span />
-          )}
-          <span className="text-[var(--color-ink-muted)]">
-            Page {page} of {pages}
-          </span>
-          {page < pages ? (
-            <Button asChild variant="secondary" size="sm">
-              <Link href={pageHref(page + 1)}>Older</Link>
-            </Button>
-          ) : (
-            <span />
-          )}
-        </nav>
+        <Pager
+          previous={page > 1 ? { href: pageHref(page - 1), label: back } : undefined}
+          next={page < pages ? { href: pageHref(page + 1), label: onwards } : undefined}
+          status={`Page ${page} of ${pages}`}
+        />
       )}
     </>
   )
@@ -197,9 +197,11 @@ function AuditRow({ event }: { event: AuditEvent }) {
       <LocalTime
         value={event.occurredAt.toISOString()}
         seconds
-        className="w-44 shrink-0 tabular-nums text-[var(--color-ink-muted)]"
+        className="shrink-0 text-xs tabular-nums text-[var(--color-ink-muted)] sm:w-44 sm:text-sm"
       />
-      <div className="min-w-0 flex-1">
+      {/* On a phone the time is a line of its own above the event, not a
+          column taking half the width. */}
+      <div className="min-w-0 basis-full sm:flex-1 sm:basis-0">
         <p>
           <span className="font-medium">{actorName(event)}</span>{' '}
           <span className="text-[var(--color-ink-muted)]">

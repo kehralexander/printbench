@@ -4,6 +4,7 @@ import { useState, useTransition } from 'react'
 import { CheckCircle2, Loader2, Send, XCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Checkbox } from '@/components/ui/checkbox'
 import type { SlotAssignment } from '@pb/core'
 import { listPrintHosts, sendFileToPrinter, type SlotChoice } from './send-actions'
 import { SlotChooser } from './slot-chooser'
@@ -76,11 +77,7 @@ export function SendToPrinter({ fileId, filename }: { fileId: string; filename: 
         ) : (
           <>
             <label className="flex items-center gap-2 px-3 py-2 text-xs text-[var(--color-ink-muted)]">
-              <input
-                type="checkbox"
-                checked={startPrint}
-                onChange={(e) => setStartPrint(e.target.checked)}
-              />
+              <Checkbox checked={startPrint} onChange={(e) => setStartPrint(e.target.checked)} />
               Start printing on arrival
             </label>
 

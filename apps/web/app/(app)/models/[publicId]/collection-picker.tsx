@@ -6,6 +6,7 @@ import { Check, FolderPlus, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Checkbox } from '@/components/ui/checkbox'
 import { create, setMembership } from '../../collections/actions'
 
 /**
@@ -63,7 +64,8 @@ export function CollectionPicker({
   return (
     <Popover onOpenChange={(open) => open && setError(null)}>
       <PopoverTrigger asChild>
-        <Button variant="ghost" size="sm">
+        {/* Labelled for the phone layout, where only the icon shows. */}
+        <Button variant="ghost" size="sm" aria-label="Collections">
           <FolderPlus />
           <span className="hidden sm:inline">Collections</span>
         </Button>
@@ -82,8 +84,7 @@ export function CollectionPicker({
               key={collection.id}
               className="flex cursor-pointer items-center gap-2 rounded-[var(--radius-control)] px-2 py-1.5 text-sm hover:bg-[var(--color-surface-2)]"
             >
-              <input
-                type="checkbox"
+              <Checkbox
                 checked={member.has(collection.id)}
                 disabled={pending}
                 onChange={(e) => toggle(collection.id, e.target.checked)}

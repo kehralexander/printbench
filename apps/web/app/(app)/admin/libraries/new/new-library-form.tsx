@@ -1,5 +1,6 @@
 'use client'
 
+import * as React from 'react'
 import { useEffect, useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import {
@@ -15,8 +16,10 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Field } from '@/components/ui/field'
-import { Card, CardContent } from '@/components/ui/card'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
+import { Callout } from '@/components/ui/callout'
+import { Checkbox } from '@/components/ui/checkbox'
 import { cn } from '@/lib/cn'
 import {
   createLibrary,
@@ -153,41 +156,24 @@ export function NewLibraryForm() {
 
   if (kind === null) {
     return (
-      <div className="max-w-3xl space-y-4">
+      <div className="max-w-2xl space-y-6">
         <p className="text-sm text-[var(--color-ink-muted)]">What is this library for?</p>
 
         <div className="grid gap-3 sm:grid-cols-2">
-          <button
-            type="button"
+          <ChoiceCard
+            icon={<HardDrive />}
+            title="Files I already have"
+            description="Point at a folder of STLs and 3MFs. They are indexed where they sit and are never moved, renamed or deleted."
+            note="This is what almost everyone wants."
             onClick={() => setKind('in_place')}
-            className="rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface)] p-5 text-left transition-shadow hover:shadow-[var(--shadow-card)]"
-          >
-            <HardDrive className="size-5 text-[var(--color-accent)]" />
-            <p className="mt-3 font-medium">Files I already have</p>
-            <p className="mt-1 text-sm text-[var(--color-ink-muted)]">
-              Point at a folder of STLs and 3MFs. They are indexed where they sit and are never
-              moved, renamed or deleted.
-            </p>
-            <p className="mt-2 text-xs text-[var(--color-ink-faint)]">
-              This is what almost everyone wants.
-            </p>
-          </button>
-
-          <button
-            type="button"
+          />
+          <ChoiceCard
+            icon={<Upload />}
+            title="Somewhere to upload to"
+            description="A folder this app owns and writes to, so you can add models through the browser. It starts empty."
+            note="You need one of these before the Upload page can do anything."
             onClick={() => setKind('managed')}
-            className="rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface)] p-5 text-left transition-shadow hover:shadow-[var(--shadow-card)]"
-          >
-            <Upload className="size-5 text-[var(--color-accent)]" />
-            <p className="mt-3 font-medium">Somewhere to upload to</p>
-            <p className="mt-1 text-sm text-[var(--color-ink-muted)]">
-              A folder this app owns and writes to, so you can add models through the browser. It
-              starts empty.
-            </p>
-            <p className="mt-2 text-xs text-[var(--color-ink-faint)]">
-              You need one of these before the Upload page can do anything.
-            </p>
-          </button>
+          />
         </div>
 
         <Button variant="ghost" onClick={() => router.push('/admin/libraries')}>
@@ -201,7 +187,7 @@ export function NewLibraryForm() {
 
   if (backend === null) {
     return (
-      <div className="max-w-3xl space-y-4">
+      <div className="max-w-2xl space-y-6">
         <div className="flex items-center justify-between gap-3">
           <p className="text-sm text-[var(--color-ink-muted)]">
             {kind === 'managed' ? 'Where should uploads be stored?' : 'Where are these files?'}
@@ -212,33 +198,26 @@ export function NewLibraryForm() {
         </div>
 
         <div className="grid gap-3 sm:grid-cols-2">
-          <button
-            type="button"
-            onClick={() => setBackend('local')}
-            className="rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface)] p-5 text-left transition-shadow hover:shadow-[var(--shadow-card)]"
-          >
-            <HardDrive className="size-5 text-[var(--color-accent)]" />
-            <p className="mt-3 font-medium">On this server</p>
-            <p className="mt-1 text-sm text-[var(--color-ink-muted)]">
-              {kind === 'managed'
+          <ChoiceCard
+            icon={<HardDrive />}
+            title="On this server"
+            description={
+              kind === 'managed'
                 ? 'A folder alongside the application’s own data, so it is covered by the same backup.'
-                : 'A local disk or a mounted NAS share. Chosen by browsing what is there.'}
-            </p>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setBackend('s3')}
-            className="rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface)] p-5 text-left transition-shadow hover:shadow-[var(--shadow-card)]"
-          >
-            <Cloud className="size-5 text-[var(--color-accent)]" />
-            <p className="mt-3 font-medium">S3-compatible storage</p>
-            <p className="mt-1 text-sm text-[var(--color-ink-muted)]">
-              {kind === 'managed'
+                : 'A local disk or a mounted NAS share. Chosen by browsing what is there.'
+            }
+            onClick={() => setBackend('local')}
+          />
+          <ChoiceCard
+            icon={<Cloud />}
+            title="S3-compatible storage"
+            description={
+              kind === 'managed'
                 ? 'A bucket this app uploads into: AWS S3, MinIO, Backblaze, or anything speaking the same API.'
-                : 'A bucket you already have files in: AWS S3, MinIO, Backblaze, or anything speaking the same API.'}
-            </p>
-          </button>
+                : 'A bucket you already have files in: AWS S3, MinIO, Backblaze, or anything speaking the same API.'
+            }
+            onClick={() => setBackend('s3')}
+          />
         </div>
       </div>
     )
@@ -250,7 +229,7 @@ export function NewLibraryForm() {
     const readyToCreate = name.trim() !== '' && (backend !== 's3' || s3.bucket.trim() !== '')
 
     return (
-      <div className="max-w-3xl space-y-4">
+      <div className="max-w-2xl space-y-6">
         <Card>
           <CardContent className="space-y-4 p-5">
             <p className="flex items-start gap-2 text-sm text-[var(--color-ink-muted)]">
@@ -315,18 +294,17 @@ export function NewLibraryForm() {
   const ready = backend === 's3' ? Boolean(s3.bucket.trim()) : Boolean(path)
 
   return (
-    <div className="max-w-3xl space-y-6">
+    <div className="max-w-2xl space-y-6">
       <Card>
-        <CardContent className="space-y-4 p-5">
-          <div className="flex items-center justify-between gap-3">
-            <p className="text-sm font-medium">
-              {backend === 's3' ? 'Connect the bucket' : 'Choose the folder holding your models'}
-            </p>
-            <Button variant="ghost" size="sm" onClick={() => setBackend(null)}>
-              Back
-            </Button>
-          </div>
-
+        <CardHeader className="flex flex-row items-center justify-between gap-3 space-y-0">
+          <CardTitle>
+            {backend === 's3' ? 'Connect the bucket' : 'Choose the folder holding your models'}
+          </CardTitle>
+          <Button variant="ghost" size="sm" onClick={() => setBackend(null)}>
+            Back
+          </Button>
+        </CardHeader>
+        <CardContent className="space-y-4">
           {backend === 's3' ? (
             <S3Fields
               value={s3}
@@ -377,80 +355,71 @@ export function NewLibraryForm() {
       */}
       {preview?.ok && (
         <Card>
-          <CardContent className="space-y-5 p-5">
-            <div className="flex flex-wrap items-baseline gap-x-6 gap-y-1">
-              <p className="text-sm">
-                <span className="text-2xl font-semibold tabular-nums">{preview.modelCount}</span>{' '}
-                <span className="text-[var(--color-ink-muted)]">models</span>
-              </p>
-              <p className="text-sm text-[var(--color-ink-muted)]">
-                {preview.fileCount} files · {preview.containerCount} folders treated as groups
-              </p>
+          <CardHeader>
+            <CardTitle>How folders are grouped</CardTitle>
+            <CardDescription>
+              Which folders become models. The preview below updates as you change it.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="grid gap-2 sm:grid-cols-3">
+              {MODES.map((option) => (
+                <ChoiceCard
+                  key={option.value}
+                  compact
+                  selected={mode === option.value}
+                  title={option.label}
+                  description={option.description}
+                  onClick={() => changeMode(option.value)}
+                />
+              ))}
             </div>
+
+            {mode === 'flat' && (
+              <div className="mt-3 max-w-40">
+                <Field label="Depth" htmlFor="depth">
+                  <Input
+                    name="depth"
+                    type="number"
+                    min={1}
+                    max={6}
+                    value={depth}
+                    onChange={(e) => {
+                      const next = Number(e.target.value)
+                      setDepth(next)
+                      void runPreview(mode, next)
+                    }}
+                  />
+                </Field>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {preview?.ok && (
+        <Card>
+          <CardHeader>
+            <CardTitle>What will be indexed</CardTitle>
+            <CardDescription>
+              {preview.fileCount} files · {preview.containerCount} folders treated as groups
+              {preview.samples.length > 0 && '. A sample of the models it would create is below.'}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-5">
+            <p className="text-sm">
+              <span className="text-2xl font-semibold tabular-nums">{preview.modelCount}</span>{' '}
+              <span className="text-[var(--color-ink-muted)]">models</span>
+            </p>
 
             {preview.warnings.map((warning) => (
-              <p
-                key={warning}
-                className="flex items-start gap-2 rounded-[var(--radius-control)] bg-[var(--color-surface-2)] p-3 text-sm text-[var(--color-ink-muted)]"
-              >
-                <AlertTriangle className="mt-0.5 size-4 shrink-0 text-[var(--color-warning)]" />
+              <Callout key={warning} tone="warning" icon={<AlertTriangle />}>
                 {warning}
-              </p>
+              </Callout>
             ))}
-
-            <div>
-              <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-[var(--color-ink-faint)]">
-                How folders are grouped
-              </p>
-              <div className="grid gap-2 sm:grid-cols-3">
-                {MODES.map((option) => (
-                  <button
-                    key={option.value}
-                    type="button"
-                    onClick={() => changeMode(option.value)}
-                    className={cn(
-                      'rounded-[var(--radius-control)] border p-3 text-left transition-colors',
-                      mode === option.value
-                        ? 'border-[var(--color-accent)] bg-[var(--color-accent-soft)]'
-                        : 'border-[var(--color-border)] hover:bg-[var(--color-surface-2)]',
-                    )}
-                  >
-                    <span className="flex items-center gap-1.5 text-sm font-medium">
-                      {option.label}
-                      {mode === option.value && <Check className="size-3.5" />}
-                    </span>
-                    <span className="mt-1 block text-xs text-[var(--color-ink-muted)]">
-                      {option.description}
-                    </span>
-                  </button>
-                ))}
-              </div>
-
-              {mode === 'flat' && (
-                <div className="mt-3 max-w-40">
-                  <Field label="Depth" htmlFor="depth">
-                    <Input
-                      name="depth"
-                      type="number"
-                      min={1}
-                      max={6}
-                      value={depth}
-                      onChange={(e) => {
-                        const next = Number(e.target.value)
-                        setDepth(next)
-                        void runPreview(mode, next)
-                      }}
-                    />
-                  </Field>
-                </div>
-              )}
-            </div>
 
             {preview.samples.length > 0 && (
               <div>
-                <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-[var(--color-ink-faint)]">
-                  Sample of what would be created
-                </p>
                 <ul className="divide-y divide-[var(--color-border)] rounded-[var(--radius-control)] border border-[var(--color-border)]">
                   {preview.samples.map((sample) => (
                     <li key={sample.path} className="flex items-center gap-3 px-3 py-2">
@@ -487,11 +456,10 @@ export function NewLibraryForm() {
             </Field>
 
             <label className="flex cursor-pointer items-start gap-3">
-              <input
-                type="checkbox"
+              <Checkbox
                 checked={writeSidecar}
                 onChange={(e) => setWriteSidecar(e.target.checked)}
-                className="mt-0.5 size-4 accent-[var(--color-accent)]"
+                className="mt-0.5"
               />
               <span className="text-sm">
                 <span className="font-medium">Write a metadata sidecar into each model folder</span>
@@ -516,5 +484,54 @@ export function NewLibraryForm() {
         </Card>
       )}
     </div>
+  )
+}
+
+/**
+ * One option of a choice made by clicking a card: the kind of library, where
+ * it lives, how its folders are grouped. `compact` is for a row of three.
+ */
+function ChoiceCard({
+  icon,
+  title,
+  description,
+  note,
+  selected = false,
+  compact = false,
+  onClick,
+}: {
+  icon?: React.ReactNode
+  title: string
+  description: React.ReactNode
+  note?: string
+  selected?: boolean
+  compact?: boolean
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={selected}
+      className={cn(
+        'rounded-[var(--radius-card)] border text-left transition-colors',
+        compact ? 'p-3' : 'p-5',
+        selected
+          ? 'border-[var(--color-accent)] bg-[var(--color-accent-soft)]'
+          : 'border-[var(--color-border)] bg-[var(--color-surface)] hover:bg-[var(--color-surface-2)]',
+      )}
+    >
+      {icon && <span className="mb-3 block text-[var(--color-accent)] [&_svg]:size-5">{icon}</span>}
+      <span className={cn('flex items-center gap-1.5 font-medium', compact && 'text-sm')}>
+        {title}
+        {selected && <Check className="size-3.5" />}
+      </span>
+      <span
+        className={cn('mt-1 block text-[var(--color-ink-muted)]', compact ? 'text-xs' : 'text-sm')}
+      >
+        {description}
+      </span>
+      {note && <span className="mt-2 block text-xs text-[var(--color-ink-faint)]">{note}</span>}
+    </button>
   )
 }

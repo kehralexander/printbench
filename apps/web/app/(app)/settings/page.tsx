@@ -26,7 +26,7 @@ export default async function AccountSettingsPage() {
         title="Account settings"
         description="Manage your PrintBench account password and model source connections."
       />
-      <div className="max-w-3xl space-y-6">
+      <div className="max-w-2xl space-y-6">
         <PasswordForm email={user.email} />
         {connections && (
           <>

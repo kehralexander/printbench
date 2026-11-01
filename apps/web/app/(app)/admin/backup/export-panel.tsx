@@ -3,6 +3,7 @@
 import { useRef, useState, useTransition } from 'react'
 import { Download, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Field } from '@/components/ui/field'
 import { createExportTicket } from './actions'
@@ -59,12 +60,11 @@ export function ExportPanel({ managedLibraries }: { managedLibraries: number }) 
       <input type="hidden" name="subject" />
 
       <label className="flex items-start gap-3 text-sm">
-        <input
-          type="checkbox"
+        <Checkbox
           name="includeFiles"
           defaultChecked={managedLibraries > 0}
           disabled={managedLibraries === 0}
-          className="mt-0.5 size-4 accent-[var(--color-accent)]"
+          className="mt-0.5"
         />
         <span>
           <span className="font-medium">Include uploaded files</span>

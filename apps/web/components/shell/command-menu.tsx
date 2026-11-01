@@ -251,7 +251,7 @@ export function CommandTrigger() {
       >
         <Search className="size-4" />
         <span>Search…</span>
-        <kbd className="ml-auto rounded border border-[var(--color-border)] px-1.5 py-0.5 font-sans text-[10px] text-[var(--color-ink-faint)]">
+        <kbd className="ml-auto hidden rounded border border-[var(--color-border)] px-1.5 py-0.5 font-sans text-[10px] text-[var(--color-ink-faint)] sm:inline-block">
           ⌘K
         </kbd>
       </button>

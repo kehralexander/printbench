@@ -1,6 +1,8 @@
+import type { ReactNode } from 'react'
 import Link from 'next/link'
 import { Check, X } from 'lucide-react'
 import type { SearchFacets } from '@pb/core'
+import type { Route } from 'next'
 import { cn } from '@/lib/cn'
 import { buildHref, toggleHref, type ParsedSearchParams, type RawParams } from './params'
 
@@ -92,26 +94,14 @@ export function FacetPanel({
           ].map((option) => {
             const active = params.type === option.value
             return (
-              <Link
+              <FacetRow
                 key={option.value}
                 href={buildHref(raw, { type: active ? null : option.value })}
-                className={cn(
-                  'flex items-center gap-2 rounded-[var(--radius-control)] px-2 py-1 text-sm transition-colors',
-                  active
-                    ? 'bg-[var(--color-accent-soft)] font-medium text-[var(--color-accent)]'
-                    : 'text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-2)]',
-                )}
+                active={active}
+                mark="radio"
               >
-                <span
-                  className={cn(
-                    'flex size-3.5 shrink-0 items-center justify-center rounded-full border',
-                    active ? 'border-[var(--color-accent)]' : 'border-[var(--color-border-strong)]',
-                  )}
-                >
-                  {active && <span className="size-2 rounded-full bg-[var(--color-accent)]" />}
-                </span>
                 {option.label}
-              </Link>
+              </FacetRow>
             )
           })}
         </div>
@@ -119,29 +109,15 @@ export function FacetPanel({
 
       <div className="space-y-1">
         {toggles.map((toggle) => (
-          <Link
+          <FacetRow
             key={toggle.key}
             href={buildHref(raw, { [toggle.key]: toggle.active ? null : '1' })}
+            active={toggle.active}
             title={toggle.hint}
-            className={cn(
-              'flex items-center gap-2 rounded-[var(--radius-control)] px-2 py-1.5 text-sm transition-colors',
-              toggle.active
-                ? 'bg-[var(--color-accent-soft)] font-medium text-[var(--color-accent)]'
-                : 'text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-2)]',
-            )}
+            className="py-1.5"
           >
-            <span
-              className={cn(
-                'flex size-3.5 shrink-0 items-center justify-center rounded-[3px] border',
-                toggle.active
-                  ? 'border-[var(--color-accent)] bg-[var(--color-accent)] text-white'
-                  : 'border-[var(--color-border-strong)]',
-              )}
-            >
-              {toggle.active && <Check className="size-2.5" strokeWidth={3} />}
-            </span>
             {toggle.label}
-          </Link>
+          </FacetRow>
         ))}
       </div>
 
@@ -155,32 +131,14 @@ export function FacetPanel({
               const active = group.selected.includes(option.value)
               return (
                 <li key={option.value}>
-                  <Link
-                    href={toggleHref(raw, group.key, option.value)}
-                    className={cn(
-                      'flex items-center gap-2 rounded-[var(--radius-control)] px-2 py-1 text-sm transition-colors',
-                      active
-                        ? 'bg-[var(--color-accent-soft)] font-medium text-[var(--color-accent)]'
-                        : 'text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-2)]',
-                    )}
-                  >
-                    <span
-                      className={cn(
-                        'flex size-3.5 shrink-0 items-center justify-center rounded-[3px] border',
-                        active
-                          ? 'border-[var(--color-accent)] bg-[var(--color-accent)] text-white'
-                          : 'border-[var(--color-border-strong)]',
-                      )}
-                    >
-                      {active && <Check className="size-2.5" strokeWidth={3} />}
-                    </span>
+                  <FacetRow href={toggleHref(raw, group.key, option.value)} active={active}>
                     <span className="min-w-0 flex-1 truncate" title={option.label}>
                       {option.label}
                     </span>
                     <span className="shrink-0 text-xs tabular-nums text-[var(--color-ink-faint)]">
                       {NUMBER.format(option.count)}
                     </span>
-                  </Link>
+                  </FacetRow>
                 </li>
               )
             })}
@@ -188,5 +146,62 @@ export function FacetPanel({
         </div>
       ))}
     </aside>
+  )
+}
+
+/**
+ * One filter option: a link styled as a tick box (or a radio, for the
+ * either-or type filter) that is highlighted while the filter is on.
+ */
+function FacetRow({
+  href,
+  active,
+  mark = 'check',
+  title,
+  className,
+  children,
+}: {
+  href: Route
+  active: boolean
+  mark?: 'check' | 'radio'
+  title?: string
+  className?: string
+  children: ReactNode
+}) {
+  return (
+    <Link
+      href={href}
+      title={title}
+      className={cn(
+        'flex items-center gap-2 rounded-[var(--radius-control)] px-2 py-1 text-sm transition-colors',
+        active
+          ? 'bg-[var(--color-accent-soft)] font-medium text-[var(--color-accent)]'
+          : 'text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-2)]',
+        className,
+      )}
+    >
+      {mark === 'radio' ? (
+        <span
+          className={cn(
+            'flex size-3.5 shrink-0 items-center justify-center rounded-full border',
+            active ? 'border-[var(--color-accent)]' : 'border-[var(--color-border-strong)]',
+          )}
+        >
+          {active && <span className="size-2 rounded-full bg-[var(--color-accent)]" />}
+        </span>
+      ) : (
+        <span
+          className={cn(
+            'flex size-3.5 shrink-0 items-center justify-center rounded-[3px] border',
+            active
+              ? 'border-[var(--color-accent)] bg-[var(--color-accent)] text-[var(--color-accent-ink)]'
+              : 'border-[var(--color-border-strong)]',
+          )}
+        >
+          {active && <Check className="size-2.5" strokeWidth={3} />}
+        </span>
+      )}
+      {children}
+    </Link>
   )
 }

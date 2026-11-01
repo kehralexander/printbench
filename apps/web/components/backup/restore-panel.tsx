@@ -6,7 +6,9 @@ import type { BackupTicket } from '@pb/core'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Field } from '@/components/ui/field'
+import { Callout } from '@/components/ui/callout'
 import { LocalTime } from '@/components/ui/local-time'
+import { formatBytes } from '@/lib/format'
 
 /** What the worker reports about an uploaded backup before anything is changed. */
 interface Summary {
@@ -247,14 +249,11 @@ export function RestorePanel({
 
         {!firstRun && (
           <>
-            <p className="flex items-start gap-2 rounded-[var(--radius-card)] border border-[var(--color-danger)] bg-[var(--color-danger-soft)] px-4 py-3 text-sm text-[var(--color-danger)]">
-              <AlertTriangle className="mt-0.5 size-4 shrink-0" />
-              <span>
-                This replaces everything on this instance: every account, model record, tag, print
-                and setting. Everyone is signed out, including you. It cannot be undone, so download
-                a backup of this instance first if you might want it back.
-              </span>
-            </p>
+            <Callout tone="danger" icon={<AlertTriangle />}>
+              This replaces everything on this instance: every account, model record, tag, print and
+              setting. Everyone is signed out, including you. It cannot be undone, so download a
+              backup of this instance first if you might want it back.
+            </Callout>
             <Field label={`Type ${CONFIRM_WORD} to confirm`} htmlFor="restore-confirm">
               <Input
                 autoComplete="off"
@@ -345,15 +344,4 @@ function parse(text: string): unknown {
 
 function plural(count: number, one: string, many = `${one}s`): string {
   return `${count.toLocaleString()} ${count === 1 ? one : many}`
-}
-
-function formatBytes(bytes: number): string {
-  const units = ['B', 'KB', 'MB', 'GB', 'TB']
-  let value = bytes
-  let unit = 0
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024
-    unit++
-  }
-  return `${value.toFixed(unit === 0 || value >= 100 ? 0 : 1)} ${units[unit]}`
 }

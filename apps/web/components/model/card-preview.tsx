@@ -28,8 +28,11 @@ export function CardPreview({
         alt=""
         loading="lazy"
         decoding="async"
+        // light-dark(): a pale tint behind the render in the light theme, a
+        // deep one in the dark theme, so a card is never the brightest thing
+        // on a dark page. The html element sets color-scheme per theme.
         style={{
-          background: `linear-gradient(160deg, oklch(96% 0.012 ${hue}), oklch(90% 0.02 ${hue + 20}))`,
+          background: `linear-gradient(160deg, light-dark(oklch(96% 0.012 ${hue}), oklch(30% 0.02 ${hue})), light-dark(oklch(90% 0.02 ${hue + 20}), oklch(24% 0.03 ${hue + 20})))`,
         }}
         className="size-full object-contain transition-transform duration-200 group-hover:scale-[1.03]"
       />

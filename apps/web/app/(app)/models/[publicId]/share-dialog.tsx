@@ -2,9 +2,11 @@
 
 import { useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
-import { Check, Copy, Link2, Loader2, Trash2 } from 'lucide-react'
+import { Loader2, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { CopyButton } from '@/components/ui/copy-button'
+import { Input } from '@/components/ui/input'
+import { Dialog, DialogContent } from '@/components/ui/dialog'
 import { createShareLink, revokeShareLink } from './share-actions'
 
 /**
@@ -14,19 +16,20 @@ import { createShareLink, revokeShareLink } from './share-actions'
  * an unshared model has no link and pretending otherwise would suggest the
  * whole library is public.
  */
-export function ShareButton({
+export function ShareDialog({
   publicId,
-  shared,
   shareUrl,
+  open,
+  onOpenChange,
 }: {
   publicId: string
-  shared: boolean
+  open: boolean
+  onOpenChange: (open: boolean) => void
   /** Built on the server, which knows the configured public address. */
   shareUrl: string | null
 }) {
   const router = useRouter()
   const [url, setUrl] = useState(shareUrl)
-  const [copied, setCopied] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [pending, startTransition] = useTransition()
 
@@ -55,48 +58,39 @@ export function ShareButton({
     })
   }
 
-  async function copy() {
-    if (!url) return
-    try {
-      await navigator.clipboard.writeText(url)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    } catch {
-      // Clipboard access can be refused; the input below is selectable anyway.
-      setError('Could not copy. Select the link and copy it by hand.')
-    }
-  }
-
   return (
-    <Popover onOpenChange={(open) => open && setError(null)}>
-      <PopoverTrigger asChild>
-        <Button variant="ghost" size="sm">
-          <Link2 />
-          <span className="hidden sm:inline">{shared || url ? 'Shared' : 'Share'}</span>
-        </Button>
-      </PopoverTrigger>
-
-      <PopoverContent className="w-80 space-y-2 p-3">
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        onOpenChange(next)
+        if (!next) setError(null)
+      }}
+    >
+      <DialogContent size="sm" title="Share by link" className="space-y-2">
         {url ? (
           <>
             <p className="text-xs text-[var(--color-ink-muted)]">
               Anyone with this link can view and download this model. Nothing else.
             </p>
-            <input
+            <Input
               readOnly
+              aria-label="Share link"
               value={url}
               onFocus={(e) => e.currentTarget.select()}
-              className="w-full rounded-[var(--radius-control)] border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1.5 font-mono text-xs"
+              className="h-8 bg-[var(--color-surface-2)] px-2 font-mono text-xs"
             />
-            <div className="flex gap-2">
-              <Button size="sm" variant="secondary" onClick={copy}>
-                {copied ? <Check /> : <Copy />}
-                {copied ? 'Copied' : 'Copy'}
-              </Button>
-              <Button size="sm" variant="ghost" onClick={revoke} disabled={pending}>
+            <div className="flex justify-end gap-2">
+              <Button
+                size="sm"
+                variant="ghost"
+                className="text-[var(--color-danger)]"
+                onClick={revoke}
+                disabled={pending}
+              >
                 <Trash2 />
                 Revoke
               </Button>
+              <CopyButton value={url} label="Copy" />
             </div>
           </>
         ) : (
@@ -104,15 +98,17 @@ export function ShareButton({
             <p className="text-xs text-[var(--color-ink-muted)]">
               Creates a private link to this model that works without an account.
             </p>
-            <Button size="sm" onClick={share} disabled={pending}>
-              {pending && <Loader2 className="animate-spin" />}
-              Create a link
-            </Button>
+            <div className="flex justify-end">
+              <Button size="sm" onClick={share} disabled={pending}>
+                {pending && <Loader2 className="animate-spin" />}
+                Create a link
+              </Button>
+            </div>
           </>
         )}
 
         {error && <p className="text-xs text-[var(--color-danger)]">{error}</p>}
-      </PopoverContent>
-    </Popover>
+      </DialogContent>
+    </Dialog>
   )
 }

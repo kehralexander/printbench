@@ -1,9 +1,11 @@
 'use client'
 
 import { useState } from 'react'
-import { Check, Copy, Download, ExternalLink } from 'lucide-react'
+import { Download, ExternalLink } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Checkbox } from '@/components/ui/checkbox'
+import { CopyButton } from '@/components/ui/copy-button'
 
 const ISSUES_URL = 'https://github.com/PrintBench/printbench/issues/new'
 
@@ -35,42 +37,26 @@ export function ShareReport({
   logLines: number
 }) {
   const [includeLogs, setIncludeLogs] = useState(true)
-  const [copied, setCopied] = useState(false)
-  const [error, setError] = useState<string | null>(null)
 
   const text = includeLogs ? markdown : markdownWithoutLogs
   const stamp = new Date().toISOString().slice(0, 10)
-
-  async function copy() {
-    setError(null)
-    try {
-      await navigator.clipboard.writeText(text)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2500)
-    } catch {
-      // Clipboard access needs HTTPS or localhost; plenty of LAN installs have neither.
-      setError('Could not reach the clipboard. Download the report, or copy it from the preview.')
-    }
-  }
 
   return (
     <Card>
       <CardHeader>
         <CardTitle>Share with a bug report</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <p className="text-sm text-[var(--color-ink-muted)]">
+        <CardDescription>
           The report contains versions, settings, counts and states. It leaves out hostnames, URLs,
           file paths, email addresses and the names of your users, libraries and models, and it
           never includes passwords or keys.
-        </p>
-
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
         <label className="flex items-start gap-2.5 text-sm">
-          <input
-            type="checkbox"
+          <Checkbox
             checked={includeLogs}
             onChange={(event) => setIncludeLogs(event.target.checked)}
-            className="mt-0.5 size-4 accent-[var(--color-accent)]"
+            className="mt-0.5"
           />
           <span>
             Include the last {logLines} warning{logLines === 1 ? '' : 's'} and errors from the log
@@ -82,10 +68,9 @@ export function ShareReport({
         </label>
 
         <div className="flex flex-wrap items-center gap-2">
-          <Button onClick={copy}>
-            {copied ? <Check /> : <Copy />}
-            {copied ? 'Copied' : 'Copy for GitHub'}
-          </Button>
+          {/* Clipboard access needs HTTPS or localhost; without it, the
+              download and the preview below are the way to get the text. */}
+          <CopyButton value={text} label="Copy for GitHub" variant="primary" size="md" />
           <Button
             variant="secondary"
             onClick={() => save(`printbench-debug-${stamp}.md`, 'text/markdown', text)}
@@ -107,8 +92,6 @@ export function ShareReport({
             </a>
           </Button>
         </div>
-
-        {error && <p className="text-sm text-[var(--color-danger)]">{error}</p>}
 
         <details>
           <summary className="cursor-pointer text-sm font-medium">

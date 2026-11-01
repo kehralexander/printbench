@@ -2,9 +2,9 @@
 
 import { useEffect, useRef, useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
-import { Cloud, FolderInput, HardDrive, Loader2 } from 'lucide-react'
+import { Cloud, HardDrive, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Dialog, DialogContent } from '@/components/ui/dialog'
 import { currentLibrary, listMoveTargets, moveToLibrary, type MoveTarget } from './move-actions'
 
 /**
@@ -25,14 +25,16 @@ const QUICK_POLLS = 10
 /** Then three-second ones, to a little over ten minutes in total. */
 const MAX_POLLS = 210
 
-export function MoveButton({
+export function MoveDialog({
   publicId,
-  name,
   libraryName,
+  open,
+  onOpenChange,
 }: {
   publicId: string
-  name: string
   libraryName: string
+  open: boolean
+  onOpenChange: (open: boolean) => void
 }) {
   const router = useRouter()
   const [targets, setTargets] = useState<MoveTarget[] | null>(null)
@@ -43,13 +45,15 @@ export function MoveButton({
 
   useEffect(() => () => clearTimeout(timer.current ?? undefined), [])
 
-  function load(open: boolean) {
-    setError(null)
+  // Fetched on open rather than with the page: most visits never touch this,
+  // and the answer includes a path collision check per library.
+  useEffect(() => {
     if (!open) return
-    // Fetched on open rather than with the page: most visits never touch this,
-    // and the answer includes a path collision check per library.
-    startTransition(async () => setTargets(await listMoveTargets(publicId)))
-  }
+    startTransition(async () => {
+      setError(null)
+      setTargets(await listMoveTargets(publicId))
+    })
+  }, [open, publicId])
 
   function move(target: MoveTarget) {
     setError(null)
@@ -102,23 +106,13 @@ export function MoveButton({
   }
 
   return (
-    <Popover onOpenChange={load}>
-      <PopoverTrigger asChild>
-        <Button variant="ghost" size="sm" title={`Move ${name} to another library`}>
-          <FolderInput />
-          <span className="hidden sm:inline">Move</span>
-        </Button>
-      </PopoverTrigger>
-
-      <PopoverContent className="w-80 space-y-3 p-3">
-        <div>
-          <p className="text-sm font-medium">Move to another library</p>
-          <p className="mt-1 text-xs text-[var(--color-ink-muted)]">
-            Currently in {libraryName}. The files move; its tags, notes, collections, print history
-            and share link stay with it.
-          </p>
-        </div>
-
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent
+        size="sm"
+        title="Move to another library"
+        description={`Currently in ${libraryName}. The files move; its tags, notes, collections, print history and share link stay with it.`}
+        className="space-y-3"
+      >
         {targets === null ? (
           <p className="flex items-center gap-2 text-xs text-[var(--color-ink-muted)]">
             <Loader2 className="size-3 animate-spin" />
@@ -173,7 +167,7 @@ export function MoveButton({
         )}
 
         {error && <p className="text-xs text-[var(--color-danger)]">{error}</p>}
-      </PopoverContent>
-    </Popover>
+      </DialogContent>
+    </Dialog>
   )
 }

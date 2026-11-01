@@ -5,6 +5,7 @@ import { eq } from 'drizzle-orm'
 import { getAuth } from '@pb/auth'
 import { getDb, schema } from '@pb/db'
 import { audit } from '@/lib/audit'
+import { MIN_PASSWORD } from '@/lib/password'
 import { needsFirstRunSetup } from '@/lib/setup'
 
 type Result = { ok: true } | { ok: false; error: string }
@@ -28,8 +29,8 @@ export async function createFirstAdmin(form: FormData): Promise<Result> {
 
   if (!name) return { ok: false, error: 'Please enter your name.' }
   if (!email.includes('@')) return { ok: false, error: 'Please enter a valid email address.' }
-  if (password.length < 10) {
-    return { ok: false, error: 'Password must be at least 10 characters.' }
+  if (password.length < MIN_PASSWORD) {
+    return { ok: false, error: `Password must be at least ${MIN_PASSWORD} characters.` }
   }
 
   try {

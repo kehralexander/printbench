@@ -20,27 +20,30 @@ export default async function CollectionsPage() {
   const collections = await listCollections(getDb())
   const canEdit = can(policyUser, 'collection:edit')
 
-  return (
-    <>
-      <PageHeader
-        title="Collections"
-        description="Group models however you like: a Kickstarter wave, a campaign, or things to print next. A model can be in as many as you want."
-      />
+  const title = 'Collections'
+  const description =
+    'Group models however you like: a Kickstarter wave, a campaign, or things to print next. A model can be in as many as you want.'
 
-      {collections.length === 0 && !canEdit ? (
-        <EmptyState
-          icon={<FolderTree className="size-6" />}
-          title="No collections yet"
-          description="A member or admin can create them."
-          action={
-            <Button asChild variant="secondary">
-              <Link href="/models">Browse models</Link>
-            </Button>
-          }
-        />
-      ) : (
-        <CollectionList collections={collections} canEdit={canEdit} />
-      )}
+  return collections.length === 0 && !canEdit ? (
+    <>
+      <PageHeader title={title} description={description} />
+      <EmptyState
+        icon={<FolderTree />}
+        title="No collections yet"
+        description="A member or admin can create them."
+        action={
+          <Button asChild variant="secondary">
+            <Link href="/models">Browse models</Link>
+          </Button>
+        }
+      />
     </>
+  ) : (
+    <CollectionList
+      title={title}
+      description={description}
+      collections={collections}
+      canEdit={canEdit}
+    />
   )
 }

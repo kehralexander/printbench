@@ -418,6 +418,20 @@ export async function deletePrint(db: Database, printId: string, actorId?: strin
   await removePhotoFile(photoKey)
 }
 
+export type PrintSort = 'newest' | 'oldest' | 'longest' | 'filament' | 'name'
+
+/*
+ * Every order ends on the start time and then created_at, so paging through
+ * ties stays stable. A print with no start time falls back to created_at.
+ */
+const PRINT_ORDER: Record<PrintSort, ReturnType<typeof sql>> = {
+  newest: sql`ORDER BY coalesce(p.started_at, p.created_at) DESC, p.created_at DESC, p.id`,
+  oldest: sql`ORDER BY coalesce(p.started_at, p.created_at) ASC, p.created_at ASC, p.id`,
+  longest: sql`ORDER BY p.duration_min DESC NULLS LAST, coalesce(p.started_at, p.created_at) DESC, p.id`,
+  filament: sql`ORDER BY p.filament_used_g DESC NULLS LAST, coalesce(p.started_at, p.created_at) DESC, p.id`,
+  name: sql`ORDER BY lower(m.name) ASC, coalesce(p.started_at, p.created_at) DESC, p.id`,
+}
+
 export async function listPrints(
   db: Database,
   options: {
@@ -426,6 +440,8 @@ export async function listPrints(
     status?: PrintStatus[]
     limit?: number
     offset?: number
+    /** Defaults to newest first. */
+    sort?: PrintSort
   } = {},
 ): Promise<PrintRun[]> {
   const limit = Math.min(Math.max(options.limit ?? 50, 1), 200)
@@ -495,8 +511,7 @@ export async function listPrints(
     LEFT JOIN model_files f ON f.id = p.model_file_id
     LEFT JOIN "user" u ON u.id = p.user_id
     ${where}
-    -- Newest first, falling back to created_at for a print with no start time.
-    ORDER BY coalesce(p.started_at, p.created_at) DESC, p.created_at DESC
+    ${PRINT_ORDER[options.sort ?? 'newest']}
     LIMIT ${limit} OFFSET ${Math.max(options.offset ?? 0, 0)}
   `)
 

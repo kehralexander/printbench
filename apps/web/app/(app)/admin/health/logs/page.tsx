@@ -1,6 +1,4 @@
 import { Download, Terminal } from 'lucide-react'
-import type { Route } from 'next'
-import Link from 'next/link'
 import { isLogLevel, listLogs, type LogEntry, type LogLevel } from '@pb/core'
 import { getDb } from '@pb/db'
 import { diagnosticsUser } from '@/lib/diagnostics'
@@ -10,9 +8,11 @@ import { NotPermitted } from '@/components/shell/not-permitted'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { EmptyState } from '@/components/ui/empty-state'
-import { Input } from '@/components/ui/input'
-import { Select } from '@/components/ui/select'
+import { ListToolbar } from '@/components/ui/list-toolbar'
 import { LocalTime } from '@/components/ui/local-time'
+import { FilterBar, Pager } from '../filter-bar'
+import { UrlSortControl } from '@/components/ui/sort-control'
+import { pickSort, type SortOption } from '@/lib/sort'
 import { LiveRefresh } from './live-refresh'
 
 export const dynamic = 'force-dynamic'
@@ -25,7 +25,14 @@ interface Params {
   source?: string
   q?: string
   before?: string
+  after?: string
+  sort?: string
 }
+
+const SORTS: SortOption<'newest' | 'oldest'>[] = [
+  { value: 'newest', label: 'Newest' },
+  { value: 'oldest', label: 'Oldest' },
+]
 
 const LEVEL_CLASS: Record<LogLevel, string> = {
   debug: 'text-[var(--color-ink-faint)]',
@@ -41,13 +48,18 @@ export default async function LogsPage({ searchParams }: { searchParams: Promise
   const minLevel = isLogLevel(params.level) ? params.level : undefined
   const source = params.source === 'web' || params.source === 'worker' ? params.source : undefined
   const query = params.q?.trim().slice(0, 200) || undefined
-  const before = Math.floor(Number(params.before)) || undefined
+  const sort = pickSort(params.sort, SORTS, 'newest')
+  const newestFirst = sort === 'newest'
+  // One cursor per direction: "before" pages back from the newest line,
+  // "after" pages forward from the first.
+  const cursor = Math.floor(Number(newestFirst ? params.before : params.after)) || undefined
 
   const entries = await listLogs(getDb(), {
     minLevel,
     source,
     query,
-    beforeId: before,
+    order: sort,
+    ...(newestFirst ? { beforeId: cursor } : { afterId: cursor }),
     limit: PAGE_SIZE,
   })
 
@@ -55,19 +67,20 @@ export default async function LogsPage({ searchParams }: { searchParams: Promise
     ...(minLevel ? { level: minLevel } : {}),
     ...(source ? { source } : {}),
     ...(query ? { q: query } : {}),
+    ...(newestFirst ? {} : { sort }),
   }
-  const filtered = Object.keys(filters).length > 0
-  const oldest = entries.at(-1)
+  const filtered = Object.keys(filters).some((key) => key !== 'sort')
+  const last = entries.at(-1)
 
   return (
     <>
       <PageHeader
         title="Logs"
-        description="What the web app and the worker have written to their logs, newest first. The same lines `docker logs` shows."
+        description="What the web app and the worker have written to their logs. The same lines docker logs shows."
         actions={
           <>
             {/* Paging back through history and jumping to the top do not mix. */}
-            {!before && <LiveRefresh />}
+            {newestFirst && !cursor && <LiveRefresh />}
             <Button asChild variant="secondary" size="sm">
               <a href={`/api/admin/logs/download?${new URLSearchParams(filters)}`} download>
                 <Download />
@@ -78,53 +91,64 @@ export default async function LogsPage({ searchParams }: { searchParams: Promise
         }
       />
 
-      <form method="get" className="mb-4 flex flex-wrap items-end gap-2">
-        <div className="w-44">
-          <Select name="level" defaultValue={minLevel ?? ''} aria-label="Level">
-            <option value="">All levels</option>
-            <option value="warn">Warnings and errors</option>
-            <option value="error">Errors only</option>
-          </Select>
-        </div>
-        <div className="w-44">
-          <Select name="source" defaultValue={source ?? ''} aria-label="Process">
-            <option value="">Web and worker</option>
-            <option value="web">Web</option>
-            <option value="worker">Worker</option>
-          </Select>
-        </div>
-        <div className="min-w-48 flex-1">
-          <Input
-            name="q"
-            type="search"
-            defaultValue={query ?? ''}
-            placeholder="Search log text, e.g. scan or a model name"
-            aria-label="Search the logs"
+      <ListToolbar
+        sort={
+          <UrlSortControl
+            options={SORTS}
+            value={sort}
+            defaultValue="newest"
+            count={entries.length}
           />
-        </div>
-        <Button type="submit" variant="secondary">
-          Filter
-        </Button>
-        {(filtered || before) && (
-          <Button asChild variant="ghost">
-            <Link href="/admin/health/logs">{filtered ? 'Clear' : 'Back to latest'}</Link>
-          </Button>
-        )}
-      </form>
+        }
+      >
+        <FilterBar
+          keep={newestFirst ? {} : { sort }}
+          clearHref={
+            filtered ? `/admin/health/logs${newestFirst ? '' : `?sort=${sort}`}` : undefined
+          }
+          selects={[
+            {
+              name: 'level',
+              label: 'Level',
+              value: minLevel ?? '',
+              options: [
+                { value: '', label: 'All levels' },
+                { value: 'warn', label: 'Warnings and errors' },
+                { value: 'error', label: 'Errors only' },
+              ],
+            },
+            {
+              name: 'source',
+              label: 'Process',
+              value: source ?? '',
+              options: [
+                { value: '', label: 'Web and worker' },
+                { value: 'web', label: 'Web' },
+                { value: 'worker', label: 'Worker' },
+              ],
+            },
+          ]}
+          search={{
+            label: 'Search the logs',
+            placeholder: 'Search log text, e.g. scan or a model name',
+            value: query ?? '',
+          }}
+        />
+      </ListToolbar>
 
       {entries.length === 0 ? (
         <EmptyState
           icon={<Terminal />}
-          title={filtered || before ? 'Nothing matches' : 'No log lines yet'}
+          title={filtered || cursor ? 'Nothing matches' : 'No log lines yet'}
           description={
-            filtered || before
+            filtered || cursor
               ? 'No log lines match this filter.'
               : 'Lines appear here a couple of seconds after they are written. If the worker stays silent, check that its container is running.'
           }
         />
       ) : (
-        <Card className="overflow-x-auto py-2">
-          <ol className="min-w-max font-mono text-xs leading-5">
+        <Card className="py-2">
+          <ol className="font-mono text-xs leading-5">
             {entries.map((entry) => (
               <LogLine key={entry.id} entry={entry} />
             ))}
@@ -132,19 +156,24 @@ export default async function LogsPage({ searchParams }: { searchParams: Promise
         </Card>
       )}
 
-      {entries.length === PAGE_SIZE && oldest && (
-        <div className="mt-4 flex justify-end">
-          <Button asChild variant="secondary" size="sm">
-            <Link
-              href={
-                `/admin/health/logs?${new URLSearchParams({ ...filters, before: String(oldest.id) })}` as Route
+      <Pager
+        previous={
+          cursor
+            ? {
+                href: `/admin/health/logs?${new URLSearchParams(filters)}`,
+                label: newestFirst ? 'Back to latest' : 'Back to first',
               }
-            >
-              Older
-            </Link>
-          </Button>
-        </div>
-      )}
+            : undefined
+        }
+        next={
+          entries.length === PAGE_SIZE && last
+            ? {
+                href: `/admin/health/logs?${new URLSearchParams({ ...filters, [newestFirst ? 'before' : 'after']: String(last.id) })}`,
+                label: newestFirst ? 'Older' : 'Newer',
+              }
+            : undefined
+        }
+      />
     </>
   )
 }
@@ -152,7 +181,9 @@ export default async function LogsPage({ searchParams }: { searchParams: Promise
 function LogLine({ entry }: { entry: LogEntry }) {
   const level = isLogLevel(entry.level) ? entry.level : 'info'
   return (
-    <li className="flex gap-3 px-4 hover:bg-[var(--color-surface-2)]">
+    // Wraps rather than scrolls: a long error is the line most worth reading.
+    // On a phone the message drops below its time, level and source.
+    <li className="flex flex-wrap gap-x-3 px-4 py-0.5 hover:bg-[var(--color-surface-2)]">
       <LocalTime
         value={entry.at.toISOString()}
         seconds
@@ -162,10 +193,26 @@ function LogLine({ entry }: { entry: LogEntry }) {
         {level}
       </span>
       <span className="w-12 shrink-0 text-[var(--color-ink-faint)]">{entry.source}</span>
-      <span className={cn('whitespace-pre-wrap', level === 'error' && LEVEL_CLASS.error)}>
+      <span
+        className={cn(
+          'min-w-0 basis-full whitespace-pre-wrap break-words sm:flex-1 sm:basis-0',
+          level === 'error' && LEVEL_CLASS.error,
+        )}
+      >
         {entry.scope && <span className="text-[var(--color-accent)]">[{entry.scope}] </span>}
-        {entry.message}
+        {withoutEcho(entry.message)}
       </span>
     </li>
+  )
+}
+
+/**
+ * Libraries that format their own lines ("2026-11-01T16:04:50Z ERROR …") would
+ * show the time and level twice; the columns already say both.
+ */
+function withoutEcho(message: string): string {
+  return message.replace(
+    /^\d{4}-\d{2}-\d{2}T[\d:.]+Z?\s+(?:TRACE|DEBUG|INFO|WARN|WARNING|ERROR|FATAL)\s+/i,
+    '',
   )
 }

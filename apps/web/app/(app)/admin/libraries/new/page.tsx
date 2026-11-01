@@ -1,6 +1,7 @@
 import { getSessionUser } from '@pb/auth'
 import { can } from '@pb/core'
 import { PageHeader } from '@/components/shell/page-header'
+import { Breadcrumbs } from '@/components/shell/breadcrumbs'
 import { NotPermitted } from '@/components/shell/not-permitted'
 import { NewLibraryForm } from './new-library-form'
 
@@ -15,6 +16,7 @@ export default async function NewLibraryPage() {
 
   return (
     <>
+      <Breadcrumbs items={[{ label: 'Libraries', href: '/admin/libraries' }]} />
       <PageHeader
         title="Add a library"
         description="Point PrintBench at a folder. It indexes what is there and never moves, renames or deletes your files."

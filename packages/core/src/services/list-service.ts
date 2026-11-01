@@ -132,10 +132,19 @@ export interface LikedModel {
   addedAt: Date
 }
 
+export type LikedSort = 'liked' | 'name' | 'recent'
+
+const LIKED_ORDER = {
+  // Most recently liked first: the reason you liked it is usually recent.
+  liked: sql`li.created_at DESC`,
+  name: sql`m.name ASC, li.created_at DESC`,
+  recent: sql`m.created_at DESC, li.created_at DESC`,
+} satisfies Record<LikedSort, unknown>
+
 export async function listLiked(
   db: Database,
   userId: string,
-  options: { limit?: number; offset?: number } = {},
+  options: { limit?: number; offset?: number; sort?: LikedSort } = {},
 ): Promise<LikedModel[]> {
   const limit = Math.min(Math.max(options.limit ?? 60, 1), 200)
 
@@ -171,8 +180,7 @@ export async function listLiked(
     LEFT JOIN LATERAL (${modelGeometrySql(sql`m.id`, sql`m.preview_file_id`)}) geometry ON true
     LEFT JOIN LATERAL (${modelThumbnailSql(sql`m.id`, sql`m.preview_file_id`)}) thumb ON true
     WHERE lst.user_id = ${userId} AND lst.kind = 'liked' AND m.missing_at IS NULL
-    -- Most recently liked first: the reason you liked it is usually recent.
-    ORDER BY li.created_at DESC
+    ORDER BY ${LIKED_ORDER[options.sort ?? 'liked']}
     LIMIT ${limit} OFFSET ${Math.max(options.offset ?? 0, 0)}`)
 
   return rows.rows.map((row) => ({

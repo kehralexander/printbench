@@ -184,9 +184,45 @@ describe('diagnostics storage', { tags: ['integration'] }, () => {
     const older = await listLogs(db, { query: MARK, beforeId: all[0]!.id })
     expect(older.map((entry) => entry.message)).toEqual(['second line', 'first line'])
 
+    const oldestFirst = await listLogs(db, { query: MARK, order: 'oldest' })
+    expect(oldestFirst.map((entry) => entry.message)).toEqual([
+      'first line',
+      'second line',
+      'third line',
+    ])
+
+    const newer = await listLogs(db, { query: MARK, order: 'oldest', afterId: oldestFirst[0]!.id })
+    expect(newer.map((entry) => entry.message)).toEqual(['second line', 'third line'])
+
     const text = formatLogLines(all)
     expect(text.split('\n')).toHaveLength(3)
     expect(text.split('\n')[0]).toMatch(/INFO {2}worker \[diagnostics-test\] first line$/)
+  })
+
+  it('orders by when a line was written, not when it was stored', async () => {
+    // A worker batch that arrives after a web line it predates.
+    await db.execute(sql`
+      INSERT INTO app_logs (at, level, source, scope, message) VALUES
+        (now() - interval '1 second', 'info', 'web',    ${MARK}, 'web at 0s'),
+        (now() - interval '3 seconds', 'info', 'worker', ${MARK}, 'worker at -2s'),
+        (now() - interval '2 seconds', 'info', 'worker', ${MARK}, 'worker at -1s')`)
+
+    const newest = await listLogs(db, { query: MARK })
+    expect(newest.map((entry) => entry.message)).toEqual([
+      'web at 0s',
+      'worker at -1s',
+      'worker at -2s',
+    ])
+
+    const older = await listLogs(db, { query: MARK, beforeId: newest[0]!.id })
+    expect(older.map((entry) => entry.message)).toEqual(['worker at -1s', 'worker at -2s'])
+
+    const oldest = await listLogs(db, { query: MARK, order: 'oldest' })
+    expect(oldest.map((entry) => entry.message)).toEqual([
+      'worker at -2s',
+      'worker at -1s',
+      'web at 0s',
+    ])
   })
 
   it('prunes logs older than the retention window', async () => {

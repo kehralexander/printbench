@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button'
 import { Field } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
+import { Textarea } from '@/components/ui/textarea'
 import type { FilamentOption } from '@/lib/filament-options'
 import {
   editRequest,
@@ -283,12 +284,11 @@ export function RequestEditor({
             />
 
             <Field label="Notes" htmlFor={`edit-notes-${request.id}`}>
-              <textarea
+              <Textarea
                 rows={3}
                 value={notes}
                 onChange={(event) => setNotes(event.target.value)}
                 placeholder="Infill, supports, who to hand it to…"
-                className="w-full rounded-[var(--radius-control)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-ink)] placeholder:text-[var(--color-ink-faint)] transition-colors focus:border-[var(--color-accent)]"
               />
             </Field>
 

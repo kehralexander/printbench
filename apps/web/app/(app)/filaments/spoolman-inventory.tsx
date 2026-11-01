@@ -1,6 +1,6 @@
 import Link from 'next/link'
 import type { Route } from 'next'
-import { ExternalLink } from 'lucide-react'
+import { CloudOff, Disc3, ExternalLink } from 'lucide-react'
 import {
   SPOOLMAN_LOW_STOCK_G,
   spoolmanSpoolLink,
@@ -8,8 +8,15 @@ import {
   type SpoolmanSpool,
 } from '@pb/core'
 import { Badge } from '@/components/ui/badge'
+import { Swatch } from '@/components/ui/swatch'
+import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { EmptyState } from '@/components/ui/empty-state'
+import { ListToolbar } from '@/components/ui/list-toolbar'
+import { Progress } from '@/components/ui/progress'
+import { UrlSortControl } from '@/components/ui/sort-control'
+import { compareAsc, compareDesc, compareText } from '@/lib/sort'
+import { SPOOLMAN_SORTS, type SpoolmanSort } from './sort'
 
 /**
  * The filament inventory when Spoolman owns it: read-only, one card per
@@ -21,25 +28,26 @@ export function SpoolmanInventory({
   result,
   baseUrl,
   showArchived,
+  sort,
 }: {
   result: SpoolmanResult
   baseUrl: string
   showArchived: boolean
+  sort: SpoolmanSort
 }) {
   if (!result.ok) {
     return (
       <EmptyState
+        icon={<CloudOff />}
         title="Spoolman is unreachable"
         description={`${result.error} The filament inventory lives in Spoolman, so there is nothing to show until it answers again.`}
         action={
-          <a
-            href={baseUrl}
-            target="_blank"
-            rel="noreferrer"
-            className="text-sm text-[var(--color-accent)] hover:underline"
-          >
-            Open Spoolman
-          </a>
+          <Button asChild variant="secondary">
+            <a href={baseUrl} target="_blank" rel="noreferrer">
+              <ExternalLink />
+              Open Spoolman
+            </a>
+          </Button>
         }
       />
     )
@@ -53,13 +61,39 @@ export function SpoolmanInventory({
     list.push(spool)
     groups.set(spool.filamentId, list)
   }
+  // Spools within a filament run fullest first, or emptiest first when that is
+  // what you are looking for; the filaments follow their fullest/emptiest spool.
+  const byRemaining = sort === 'least' ? compareAsc : compareDesc
+  for (const group of groups.values()) {
+    group.sort((a, b) => byRemaining(a.remainingG, b.remainingG))
+  }
   const ordered = [...groups.values()].sort((a, b) =>
-    groupLabel(a[0]!).localeCompare(groupLabel(b[0]!)),
+    sort === 'name'
+      ? compareText(groupLabel(a[0]!), groupLabel(b[0]!))
+      : byRemaining(a[0]!.remainingG, b[0]!.remainingG) ||
+        compareText(groupLabel(a[0]!), groupLabel(b[0]!)),
   )
+  const archivedHref = (show: boolean) => {
+    const params = new URLSearchParams()
+    if (show) params.set('archived', '1')
+    if (sort !== 'name') params.set('sort', sort)
+    const query = params.toString()
+    return (query ? `/filaments?${query}` : '/filaments') as Route
+  }
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-[var(--color-ink-muted)]">
+      <ListToolbar
+        className="mb-0 text-sm text-[var(--color-ink-muted)]"
+        sort={
+          <UrlSortControl
+            options={SPOOLMAN_SORTS}
+            value={sort}
+            defaultValue="name"
+            count={ordered.length}
+          />
+        }
+      >
         <p>
           Read-only view of{' '}
           <a
@@ -74,16 +108,17 @@ export function SpoolmanInventory({
         </p>
         {archivedCount > 0 && (
           <Link
-            href={(showArchived ? '/filaments' : '/filaments?archived=1') as Route}
+            href={archivedHref(!showArchived)}
             className="text-[var(--color-accent)] hover:underline"
           >
             {showArchived ? 'Hide archived' : `Show ${archivedCount} archived`}
           </Link>
         )}
-      </div>
+      </ListToolbar>
 
       {ordered.length === 0 ? (
         <EmptyState
+          icon={<Disc3 />}
           title="No spools in Spoolman"
           description="Spools added in Spoolman appear here."
         />
@@ -94,10 +129,10 @@ export function SpoolmanInventory({
             return (
               <Card key={first.filamentId} className="overflow-hidden">
                 <div className="flex items-center gap-3 border-b border-[var(--color-border)] px-4 py-3">
-                  <span
-                    className="size-6 shrink-0 rounded-full ring-1 ring-inset ring-[var(--color-border)]"
-                    style={{ backgroundColor: first.colorHex ?? 'transparent' }}
+                  <Swatch
+                    color={first.colorHex}
                     title={first.colorHex ?? 'No colour'}
+                    className="size-6"
                   />
                   <div className="min-w-0">
                     <p className="truncate text-sm font-semibold">
@@ -109,11 +144,9 @@ export function SpoolmanInventory({
                   </div>
                 </div>
                 <ul className="divide-y divide-[var(--color-border)]">
-                  {group
-                    .sort((a, b) => (b.remainingG ?? 0) - (a.remainingG ?? 0))
-                    .map((spool) => (
-                      <SpoolRow key={spool.id} spool={spool} />
-                    ))}
+                  {group.map((spool) => (
+                    <SpoolRow key={spool.id} spool={spool} />
+                  ))}
                 </ul>
               </Card>
             )
@@ -126,17 +159,14 @@ export function SpoolmanInventory({
 
 function SpoolRow({ spool }: { spool: SpoolmanSpool }) {
   const remaining = spool.remainingG
-  const percent =
-    remaining != null && spool.initialG
-      ? Math.max(0, Math.min(100, (remaining / spool.initialG) * 100))
-      : null
+  const fraction = remaining != null && spool.initialG ? remaining / spool.initialG : null
   const state =
     remaining == null
       ? null
       : remaining <= 0
         ? { label: 'Empty', tone: 'danger' as const }
         : remaining <= SPOOLMAN_LOW_STOCK_G
-          ? { label: 'Low', tone: 'accent' as const }
+          ? { label: 'Low', tone: 'warning' as const }
           : null
   const link = spoolmanSpoolLink(spool.id)
 
@@ -163,20 +193,13 @@ function SpoolRow({ spool }: { spool: SpoolmanSpool }) {
           </a>
         )}
       </div>
-      {percent != null && (
-        <div
-          role="progressbar"
-          aria-label={`Spool ${spool.id} remaining`}
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-valuenow={Math.round(percent)}
-          className="h-1.5 overflow-hidden rounded-full bg-[var(--color-surface-2)]"
-        >
-          <div
-            className="h-full rounded-full bg-[var(--color-accent)]"
-            style={{ width: `${percent}%` }}
-          />
-        </div>
+      {fraction != null && (
+        <Progress
+          value={fraction}
+          label={`Spool ${spool.id} remaining`}
+          size="sm"
+          tone={state?.tone ?? 'accent'}
+        />
       )}
       {spool.comment && <p className="text-xs text-[var(--color-ink-muted)]">{spool.comment}</p>}
     </li>

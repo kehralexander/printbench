@@ -7,25 +7,36 @@ import {
   listProblems,
   problemSummary,
   type ProblemKind,
-  type ProblemSeverity,
+  type ProblemSort,
 } from '@pb/core'
 import { getSessionUser } from '@pb/auth'
 import { getDb, schema } from '@pb/db'
 import { PageHeader } from '@/components/shell/page-header'
 import { NotPermitted } from '@/components/shell/not-permitted'
 import { EmptyState } from '@/components/ui/empty-state'
+import { ListToolbar } from '@/components/ui/list-toolbar'
+import { UrlSortControl } from '@/components/ui/sort-control'
+import { pickSort, type SortOption } from '@/lib/sort'
 import { ProblemList } from './problem-list'
 import { RecheckButton } from './recheck-button'
+import { StatTile } from '@/components/ui/stat-tile'
 
 export const dynamic = 'force-dynamic'
 export const metadata = { title: 'Library health' }
 
 const PAGE_SIZE = 100
 
+const SORTS: readonly SortOption<ProblemSort>[] = [
+  { value: 'severity', label: 'Severity' },
+  { value: 'newest', label: 'Newest' },
+  { value: 'oldest', label: 'Oldest' },
+  { value: 'name', label: 'Model name' },
+]
+
 export default async function HealthPage({
   searchParams,
 }: {
-  searchParams: Promise<{ kind?: string; library?: string; ignored?: string }>
+  searchParams: Promise<{ kind?: string; library?: string; ignored?: string; sort?: string }>
 }) {
   const user = await getSessionUser()
   if (!can({ id: user?.id ?? '', role: user?.role ?? null }, 'library:manage')) {
@@ -38,6 +49,23 @@ export default async function HealthPage({
   const kind = (Object.keys(PROBLEM_META).includes(params.kind ?? '') ? params.kind : undefined) as
     ProblemKind | undefined
   const showIgnored = params.ignored === '1'
+  const sort = pickSort(params.sort, SORTS, 'severity')
+
+  /** This page with some filters changed and the rest — sort included — kept. */
+  function href(change: { kind?: string | null; library?: string | null; ignored?: boolean }) {
+    const next = {
+      kind: change.kind === undefined ? kind : change.kind,
+      library: change.library === undefined ? params.library : change.library,
+      ignored: change.ignored ?? showIgnored,
+    }
+    const query = new URLSearchParams({
+      ...(next.kind ? { kind: next.kind } : {}),
+      ...(next.library ? { library: next.library } : {}),
+      ...(next.ignored ? { ignored: '1' } : {}),
+      ...(sort !== 'severity' ? { sort } : {}),
+    }).toString()
+    return query ? `/admin/health?${query}` : '/admin/health'
+  }
 
   const [summary, problems, libraries] = await Promise.all([
     problemSummary(db, params.library),
@@ -46,6 +74,7 @@ export default async function HealthPage({
       libraryId: params.library,
       includeIgnored: showIgnored,
       limit: PAGE_SIZE,
+      sort,
     }),
     db
       .select({ id: schema.libraries.id, name: schema.libraries.name })
@@ -67,13 +96,15 @@ export default async function HealthPage({
     <>
       <PageHeader
         title="Library health"
-        description={
-          totals.open === 0
-            ? 'Nothing needs attention.'
-            : `${totals.open} thing${totals.open === 1 ? '' : 's'} worth looking at` +
-              (totals.danger > 0 ? `, ${totals.danger} urgent` : '') +
-              (totals.ignored > 0 ? ` · ${totals.ignored} ignored` : '')
-        }
+        // A sentence like every Diagnostics page, then what the tiles below
+        // cannot say: how many are urgent or ignored.
+        description={[
+          'Models and files that need attention.',
+          totals.danger > 0 ? `${totals.danger} urgent` : null,
+          totals.ignored > 0 ? `${totals.ignored} ignored` : null,
+        ]
+          .filter(Boolean)
+          .join(' · ')}
         actions={<RecheckButton />}
       />
 
@@ -81,66 +112,58 @@ export default async function HealthPage({
        * Ordered by severity, so a missing drive is the first thing on the page
        * and four hundred untagged models are the last.
        */}
-      <div className="mb-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+      <div className="mb-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {summary
           .filter((row) => row.open > 0)
           .map((row) => (
-            <Link
+            <StatTile
               key={row.kind}
-              href={
-                `/admin/health?kind=${row.kind}${params.library ? `&library=${params.library}` : ''}` as Route
-              }
-              aria-current={row.kind === kind ? 'page' : undefined}
-              className={tileClass(row.severity, row.kind === kind)}
-            >
-              <span className="text-2xl font-semibold tabular-nums leading-none">{row.open}</span>
-              <span className="mt-1 block text-sm font-medium">{PROBLEM_META[row.kind].label}</span>
-              <span className="mt-0.5 block text-xs opacity-80">{PROBLEM_META[row.kind].hint}</span>
-            </Link>
+              value={row.open}
+              label={PROBLEM_META[row.kind].label}
+              hint={PROBLEM_META[row.kind].hint}
+              tone={row.severity === 'info' ? 'neutral' : row.severity}
+              href={href({ kind: row.kind })}
+              active={row.kind === kind}
+            />
           ))}
       </div>
 
-      <nav className="mb-4 flex flex-wrap items-center gap-1.5 text-sm">
-        <FilterLink
-          href={`/admin/health${params.library ? `?library=${params.library}` : ''}`}
-          active={!kind}
-        >
-          All kinds
-        </FilterLink>
+      <ListToolbar
+        sort={
+          problems.length > 1 && (
+            <UrlSortControl options={SORTS} value={sort} defaultValue="severity" />
+          )
+        }
+      >
+        <nav aria-label="Filter" className="flex flex-wrap items-center gap-1.5 text-sm">
+          <FilterLink href={href({ kind: null })} active={!kind}>
+            All kinds
+          </FilterLink>
 
-        {libraries.length > 1 && (
-          <>
-            <span className="mx-1 text-[var(--color-ink-faint)]">·</span>
-            <FilterLink
-              href={`/admin/health${kind ? `?kind=${kind}` : ''}`}
-              active={!params.library}
-            >
-              All libraries
-            </FilterLink>
-            {libraries.map((library) => (
-              <FilterLink
-                key={library.id}
-                href={`/admin/health?library=${library.id}${kind ? `&kind=${kind}` : ''}`}
-                active={params.library === library.id}
-              >
-                {library.name}
+          {libraries.length > 1 && (
+            <>
+              <span className="mx-1 text-[var(--color-ink-faint)]">·</span>
+              <FilterLink href={href({ library: null })} active={!params.library}>
+                All libraries
               </FilterLink>
-            ))}
-          </>
-        )}
+              {libraries.map((library) => (
+                <FilterLink
+                  key={library.id}
+                  href={href({ library: library.id })}
+                  active={params.library === library.id}
+                >
+                  {library.name}
+                </FilterLink>
+              ))}
+            </>
+          )}
 
-        <span className="mx-1 text-[var(--color-ink-faint)]">·</span>
-        <FilterLink
-          href={`/admin/health?${new URLSearchParams({
-            ...(kind ? { kind } : {}),
-            ...(params.library ? { library: params.library } : {}),
-            ...(showIgnored ? {} : { ignored: '1' }),
-          }).toString()}`}
-          active={showIgnored}
-        >
-          {showIgnored ? 'Hiding nothing' : 'Show ignored'}
-        </FilterLink>
-      </nav>
+          <span className="mx-1 text-[var(--color-ink-faint)]">·</span>
+          <FilterLink href={href({ ignored: !showIgnored })} active={showIgnored}>
+            {showIgnored ? 'Hiding nothing' : 'Show ignored'}
+          </FilterLink>
+        </nav>
+      </ListToolbar>
 
       {problems.length === 0 ? (
         <EmptyState
@@ -195,19 +218,4 @@ function FilterLink({
       {children}
     </Link>
   )
-}
-
-function tileClass(severity: ProblemSeverity, active: boolean): string {
-  const base =
-    'block rounded-[var(--radius-card)] border p-4 transition-shadow hover:shadow-[var(--shadow-card)]'
-  const ring = active ? ' ring-2 ring-[var(--color-accent)]' : ''
-
-  switch (severity) {
-    case 'danger':
-      return `${base}${ring} border-[var(--color-danger)] bg-[var(--color-danger-soft)] text-[var(--color-danger)]`
-    case 'warning':
-      return `${base}${ring} border-[var(--color-warning)] text-[var(--color-ink)]`
-    default:
-      return `${base}${ring} border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-ink)]`
-  }
 }

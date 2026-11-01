@@ -6,6 +6,7 @@ import { usePathname, useRouter } from 'next/navigation'
 import { Check, CircleAlert, LoaderCircle, X } from 'lucide-react'
 import type { Activity } from '@/lib/activity'
 import { reconcileActivity, SUCCESS_HOLD_MS, type ActivityRow } from './activity-state'
+import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/cn'
 
 export function ActivityPanel() {
@@ -127,38 +128,43 @@ export function ActivityPanel() {
             <div
               key={row.id}
               className={cn(
-                'activity-enter flex items-center gap-3 rounded-card border border-border bg-surface p-3 text-sm shadow-pop',
+                'activity-enter flex items-center gap-3 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3 text-sm shadow-[var(--shadow-pop)]',
                 leaving && 'activity-exit',
               )}
             >
               {failed ? (
-                <CircleAlert className="h-4 w-4 shrink-0 text-danger" aria-hidden="true" />
+                <CircleAlert
+                  className="size-4 shrink-0 text-[var(--color-danger)]"
+                  aria-hidden="true"
+                />
               ) : complete ? (
-                <Check className="h-4 w-4 shrink-0 text-success" aria-hidden="true" />
+                <Check className="size-4 shrink-0 text-[var(--color-success)]" aria-hidden="true" />
               ) : (
                 <LoaderCircle
-                  className="h-4 w-4 shrink-0 animate-spin text-accent motion-reduce:animate-none"
+                  className="size-4 shrink-0 animate-spin text-[var(--color-accent)] motion-reduce:animate-none"
                   aria-hidden="true"
                 />
               )}
               <Link
                 href={row.href}
-                className="min-w-0 flex-1 rounded-control text-ink hover:underline focus-visible:outline-2 focus-visible:outline-accent"
+                className="min-w-0 flex-1 rounded-[var(--radius-control)] text-[var(--color-ink)] hover:underline focus-visible:outline-2 focus-visible:outline-[var(--color-accent)]"
               >
                 {row.label}
               </Link>
               {(failed || complete) && (
-                <button
+                <Button
                   type="button"
+                  variant="ghost"
+                  size="icon"
                   aria-label={`Dismiss: ${row.label}`}
-                  className="rounded-control p-1 text-ink-muted hover:bg-surface-2 focus-visible:outline-2 focus-visible:outline-accent"
+                  className="-my-1.5 -mr-1.5 size-7"
                   onClick={() => {
                     dismissed.current.add(row.id)
                     setRows((current) => current.filter((item) => item.id !== row.id))
                   }}
                 >
-                  <X className="h-4 w-4" aria-hidden="true" />
-                </button>
+                  <X aria-hidden="true" />
+                </Button>
               )}
             </div>
           )
@@ -166,7 +172,7 @@ export function ActivityPanel() {
       </div>
       {stale && (
         <p
-          className="mt-2 rounded-control bg-surface px-3 py-2 text-xs text-ink-muted"
+          className="mt-2 rounded-[var(--radius-control)] bg-[var(--color-surface)] px-3 py-2 text-xs text-[var(--color-ink-muted)]"
           role="status"
         >
           Activity updates interrupted. Reconnecting…

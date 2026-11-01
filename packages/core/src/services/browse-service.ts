@@ -47,6 +47,7 @@ export interface CollectionSummary {
   /** Models directly in this collection, not counting children. */
   modelCount: number
   previewFileId: string | null
+  createdAt: Date
 }
 
 export class BrowseError extends Error {
@@ -58,7 +59,19 @@ export class BrowseError extends Error {
 
 /* ------------------------------------------------------------------ creators */
 
-export async function listCreators(db: Database): Promise<CreatorSummary[]> {
+export type CreatorSort = 'items' | 'name' | 'recent'
+
+const CREATOR_ORDER = {
+  // Busiest first: rank by all present items, whether models or packages.
+  items: sql`count(m.id) DESC, c.name ASC`,
+  name: sql`c.name ASC`,
+  recent: sql`c.created_at DESC, c.name ASC`,
+} satisfies Record<CreatorSort, unknown>
+
+export async function listCreators(
+  db: Database,
+  options: { sort?: CreatorSort } = {},
+): Promise<CreatorSummary[]> {
   const rows = await db.execute<{
     id: string
     name: string
@@ -79,8 +92,7 @@ export async function listCreators(db: Database): Promise<CreatorSummary[]> {
     FROM creators c
     LEFT JOIN models m ON m.creator_id = c.id AND m.missing_at IS NULL
     GROUP BY c.id
-    -- Busiest first: rank by all present items, whether models or packages.
-    ORDER BY count(m.id) DESC, c.name ASC`)
+    ORDER BY ${CREATOR_ORDER[options.sort ?? 'items']}`)
 
   return rows.rows.map(toCreator)
 }
@@ -294,8 +306,9 @@ export async function listCollections(db: Database): Promise<CollectionSummary[]
     parent_id: string | null
     model_count: number
     preview_file_id: string | null
+    created_at: string
   }>(sql`
-    SELECT c.id, c.name, c.slug, c.public_id, c.caption, c.parent_id,
+    SELECT c.id, c.name, c.slug, c.public_id, c.caption, c.parent_id, c.created_at,
            count(cm.model_id)::int AS model_count,
            (SELECT f.id FROM collection_models x
               JOIN model_files f ON f.model_id = x.model_id
@@ -323,8 +336,9 @@ export async function collectionBySlug(
     parent_id: string | null
     model_count: number
     preview_file_id: string | null
+    created_at: string
   }>(sql`
-    SELECT c.id, c.name, c.slug, c.public_id, c.caption, c.parent_id,
+    SELECT c.id, c.name, c.slug, c.public_id, c.caption, c.parent_id, c.created_at,
            (SELECT count(*)::int FROM collection_models cm
               JOIN models m ON m.id = cm.model_id
              WHERE cm.collection_id = c.id AND m.missing_at IS NULL) AS model_count,
@@ -344,6 +358,7 @@ function toCollection(row: {
   parent_id: string | null
   model_count: number
   preview_file_id: string | null
+  created_at: string | Date
 }): CollectionSummary {
   return {
     id: row.id,
@@ -354,6 +369,7 @@ function toCollection(row: {
     parentId: row.parent_id,
     modelCount: row.model_count,
     previewFileId: row.preview_file_id,
+    createdAt: new Date(row.created_at),
   }
 }
 

@@ -4,11 +4,15 @@ import { useRef, useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { Camera, Check, Loader2, Star, X } from 'lucide-react'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { ClockTime } from '@/components/ui/clock-time'
+import { SectionHeader } from '@/components/ui/section-header'
 import { cn } from '@/lib/cn'
+import { PRINT_OUTCOME } from '@/lib/print-outcome'
 import { ratePrint, skipReview } from './review-actions'
 
 export interface UnratedLine {
@@ -31,7 +35,7 @@ export function UnratedPrints({ prints }: { prints: UnratedLine[] }) {
   if (prints.length === 0) return null
   return (
     <section className="mb-8">
-      <h2 className="mb-3 text-sm font-semibold">How did it go?</h2>
+      <SectionHeader title="How did it go?" />
       <Card className="overflow-hidden">
         <ul className="divide-y divide-[var(--color-border)]">
           {prints.map((print) => (
@@ -89,15 +93,10 @@ function UnratedRow({ print }: { print: UnratedLine }) {
         <Link href={`/models/${print.modelPublicId}`} className="font-medium hover:underline">
           {print.modelName}
         </Link>
+        <Badge tone={PRINT_OUTCOME[print.status].tone}>{PRINT_OUTCOME[print.status].label}</Badge>
         <span className="text-xs text-[var(--color-ink-muted)]">
-          {print.status === 'success' ? 'finished' : 'stopped'}
-          {print.printerName && ` on ${print.printerName}`}
-          {print.finishedAt && (
-            <>
-              {' '}
-              <ClockTime value={print.finishedAt} />
-            </>
-          )}
+          {print.printerName && `on ${print.printerName} `}
+          {print.finishedAt && <ClockTime value={print.finishedAt} />}
           {print.status !== 'success' && print.notes && ` · ${print.notes}`}
         </span>
       </div>
@@ -139,8 +138,7 @@ function UnratedRow({ print }: { print: UnratedLine }) {
 
         {print.status === 'success' && (
           <label className="flex items-center gap-1.5 text-xs text-[var(--color-ink-muted)]">
-            <input
-              type="checkbox"
+            <Checkbox
               checked={failed}
               onChange={(event) => setFailed(event.target.checked)}
               disabled={pending}

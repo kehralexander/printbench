@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Field } from '@/components/ui/field'
 import { Select } from '@/components/ui/select'
+import { Textarea } from '@/components/ui/textarea'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import type { FilamentOption } from '@/lib/filament-options'
 import { addModelToQueue, estimateFor } from '../../queue/actions'
@@ -241,12 +242,11 @@ export function QueueButton({
           />
 
           <Field label="Notes" htmlFor="queue-model-notes">
-            <textarea
+            <Textarea
               rows={2}
               value={notes}
               onChange={(event) => setNotes(event.target.value)}
               placeholder="Optional"
-              className="w-full rounded-[var(--radius-control)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-ink)] placeholder:text-[var(--color-ink-faint)] transition-colors focus:border-[var(--color-accent)]"
             />
           </Field>
 

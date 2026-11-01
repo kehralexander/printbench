@@ -15,7 +15,7 @@ export default async function DiagnosticsLayout({ children }: { children: React.
   const subject = { id: user?.id ?? '', role: user?.role ?? null, banned: user?.banned ?? false }
 
   const tabs: DiagnosticsTab[] = []
-  if (can(subject, 'library:manage')) tabs.push({ href: '/admin/health', label: 'Library health' })
+  if (can(subject, 'library:manage')) tabs.push({ href: '/admin/health', label: 'Health' })
   if (can(subject, 'diagnostics:view')) {
     tabs.push(
       { href: '/admin/health/audit', label: 'Audit trail' },

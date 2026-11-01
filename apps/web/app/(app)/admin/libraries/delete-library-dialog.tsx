@@ -2,10 +2,10 @@
 
 import { useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
-import { AlertTriangle, Loader2, Trash2 } from 'lucide-react'
+import { AlertTriangle, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Dialog, DialogContent } from '@/components/ui/dialog'
 import { deleteLibrary } from './actions'
 
 /**
@@ -21,12 +21,16 @@ import { deleteLibrary } from './actions'
  * part worth a typed confirmation, and the part the wording leads with when
  * there is anything to lose.
  */
-export function DeleteLibraryButton({
+export function DeleteLibraryDialog({
   libraryId,
   name,
   modelCount,
   writesSidecars,
+  open,
+  onOpenChange,
 }: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
   libraryId: string
   name: string
   modelCount: number
@@ -51,23 +55,16 @@ export function DeleteLibraryButton({
   }
 
   return (
-    <Popover
-      onOpenChange={(open) => {
-        if (open) return
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        onOpenChange(next)
+        if (next) return
         setTyped('')
         setError(null)
       }}
     >
-      <PopoverTrigger asChild>
-        <Button variant="ghost" size="sm" title={`Remove ${name}`}>
-          <Trash2 />
-          <span className="hidden sm:inline">Remove</span>
-        </Button>
-      </PopoverTrigger>
-
-      <PopoverContent className="w-80 space-y-3 p-3">
-        <p className="text-sm font-medium">Remove {name}?</p>
-
+      <DialogContent size="sm" title={`Remove ${name}?`} className="space-y-3">
         <p className="text-xs text-[var(--color-ink-muted)]">
           PrintBench forgets this library and the {modelCount.toLocaleString('en-GB')} model
           {modelCount === 1 ? '' : 's'} it indexed. <strong>No files are deleted.</strong> Every one
@@ -115,7 +112,7 @@ export function DeleteLibraryButton({
           {pending && <Loader2 className="animate-spin" />}
           Remove library
         </Button>
-      </PopoverContent>
-    </Popover>
+      </DialogContent>
+    </Dialog>
   )
 }

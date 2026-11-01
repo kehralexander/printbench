@@ -7,9 +7,11 @@ import {
   Check,
   CircleSlash,
   GripVertical,
+  MoreHorizontal,
   Play,
   Printer,
   RotateCcw,
+  Share2,
   Trash2,
   Undo2,
   type LucideIcon,
@@ -21,14 +23,23 @@ import {
 } from '@pb/core/requests'
 import type { FilamentSlot, LivePrint, LoadedVerdict } from '@pb/core'
 import { Badge } from '@/components/ui/badge'
+import { Swatch } from '@/components/ui/swatch'
 import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { cn } from '@/lib/cn'
+import { formatDate } from '@/lib/format'
 import type { FilamentOption } from '@/lib/filament-options'
 import { ClockTime } from '@/components/ui/clock-time'
 import { LinkPicker } from './link-picker'
 import { RequestEditor } from './request-editor'
 import { SendButton } from './send-button'
-import { ShareStatus } from './share-status'
+import { ShareStatusDialog } from './share-status'
 import { removeRequest, setRequestModel, setStatus } from './actions'
 
 export interface SpoolBadge {
@@ -163,6 +174,10 @@ export function RequestRow({
   const meta = STATUS_META[request.status]
   const Icon = meta.icon
   const closed = request.status === 'done' || request.status === 'cancelled'
+  const [sharing, setSharing] = useState(false)
+  const titleIsModel =
+    request.modelPublicId != null &&
+    request.modelName?.trim().toLowerCase() === request.title.trim().toLowerCase()
   const overdue = !closed && request.dueAt != null && new Date(request.dueAt) < new Date()
 
   function run(work: () => Promise<{ ok: boolean; error?: string }>) {
@@ -202,11 +217,7 @@ export function RequestRow({
     request.filename,
     !closed && estimate,
     !closed && neededG != null && `~${neededG} g`,
-    request.dueAt &&
-      `${overdue ? 'was due' : 'due'} ${new Date(request.dueAt).toLocaleDateString('en-GB', {
-        day: 'numeric',
-        month: 'short',
-      })}`,
+    request.dueAt && `${overdue ? 'was due' : 'due'} ${formatDate(request.dueAt)}`,
   ].filter(Boolean) as string[]
 
   return (
@@ -251,7 +262,7 @@ export function RequestRow({
         <img
           src={`/api/files/${request.thumbFileId}/thumb`}
           alt=""
-          className="size-10 shrink-0 rounded bg-[var(--color-surface-2)] object-cover"
+          className="size-10 shrink-0 rounded-[var(--radius-control)] bg-[var(--color-surface-2)] object-cover"
         />
       ) : (
         <span className="flex size-10 shrink-0 items-center justify-center rounded bg-[var(--color-surface-2)]">
@@ -261,29 +272,36 @@ export function RequestRow({
 
       <div className="min-w-0 flex-1 basis-64">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-          <span className={cn('text-sm font-medium', closed && 'line-through')}>
-            {request.title}
-          </span>
+          {titleIsModel ? (
+            <Link
+              href={`/models/${request.modelPublicId}`}
+              className={cn('text-sm font-medium hover:underline', closed && 'line-through')}
+            >
+              {request.title}
+            </Link>
+          ) : (
+            <span className={cn('text-sm font-medium', closed && 'line-through')}>
+              {request.title}
+            </span>
+          )}
           {request.quantity > 1 && <Badge tone="neutral">×{request.quantity}</Badge>}
           {request.priority === 'high' && !closed && <Badge tone="danger">Urgent</Badge>}
           {request.priority === 'low' && !closed && <Badge tone="neutral">Low</Badge>}
           {overdue && <Badge tone="danger">Overdue</Badge>}
-          {request.colorHex && (
-            <span
-              title={request.colorName ?? request.colorHex}
-              className="size-3 rounded-full ring-1 ring-inset ring-[var(--color-border)]"
-              style={{ backgroundColor: request.colorHex }}
-            />
-          )}
+          {/* No colour dot here: the line below names the colour, and the
+              "Loaded on" hint shows its swatch. */}
         </div>
 
         <p className="mt-0.5 text-xs text-[var(--color-ink-muted)]">
           {/*
            * The state of the library link is the thing worth saying on every
            * row: a request nobody can find a file for is the one that stalls,
-           * and it should be visible without opening anything.
+           * and it should be visible without opening anything. When the title
+           * already is the model's name, the title is the link.
            */}
-          {request.modelPublicId ? (
+          {titleIsModel ? (
+            [request.modelMissing && 'Missing from disk', ...details].filter(Boolean).join(' · ')
+          ) : request.modelPublicId ? (
             <>
               <Link
                 href={`/models/${request.modelPublicId}`}
@@ -418,6 +436,17 @@ export function RequestRow({
           </>
         ) : (
           <>
+            {/* First, because its label changes width ("Link to library" or
+                "Change link"): the buttons after it stay lined up row to row. */}
+            {canEdit && (
+              <LinkPicker
+                linkedName={request.modelName}
+                suggestQuery={request.title}
+                pending={pending}
+                onLink={(modelId) => run(() => setRequestModel(request.id, modelId))}
+              />
+            )}
+
             {canRun && request.status === 'requested' && (
               <Button
                 variant="ghost"
@@ -482,58 +511,66 @@ export function RequestRow({
             )}
 
             {canEdit && <RequestEditor request={request} filaments={filaments} pending={pending} />}
-
-            {canEdit && (
-              <ShareStatus
-                requestId={request.id}
-                title={request.title}
-                disabled={pending}
-                onError={setError}
-              />
-            )}
-
-            {canEdit && (
-              <LinkPicker
-                linkedName={request.modelName}
-                suggestQuery={request.title}
-                pending={pending}
-                onLink={(modelId) => run(() => setRequestModel(request.id, modelId))}
-              />
-            )}
-
-            {canEdit && (
-              <Button
-                variant="ghost"
-                size="sm"
-                disabled={pending}
-                aria-label={`Cancel ${request.title}`}
-                onClick={() => run(() => setStatus(request.id, 'cancelled'))}
-              >
-                <CircleSlash />
-              </Button>
-            )}
           </>
         )}
 
         {canEdit && (
-          <Button
-            variant="ghost"
-            size="icon"
-            disabled={pending}
-            aria-label={`Remove ${request.title}`}
-            onClick={() => {
-              /*
-               * Cancelling keeps the record and is what people usually mean.
-               * Deleting is for a request that should never have existed, so
-               * it is the one that asks.
-               */
-              if (confirm(`Remove "${request.title}" from the queue entirely?`)) {
-                run(() => removeRequest(request.id))
-              }
-            }}
-          >
-            <Trash2 />
-          </Button>
+          // Sharing, cancelling and removing are occasional, so they wait
+          // behind one button rather than adding three more icons to every row.
+          <>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  disabled={pending}
+                  aria-label={`More actions for ${request.title}`}
+                >
+                  <MoreHorizontal />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent>
+                {!closed && (
+                  <>
+                    <DropdownMenuItem onSelect={() => setSharing(true)}>
+                      <Share2 />
+                      Status link…
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onSelect={() => run(() => setStatus(request.id, 'cancelled'))}
+                    >
+                      <CircleSlash />
+                      Cancel request
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                  </>
+                )}
+                <DropdownMenuItem
+                  tone="danger"
+                  onSelect={() => {
+                    /*
+                     * Cancelling keeps the record and is what people usually mean.
+                     * Deleting is for a request that should never have existed, so
+                     * it is the one that asks.
+                     */
+                    if (confirm(`Remove "${request.title}" from the queue entirely?`)) {
+                      run(() => removeRequest(request.id))
+                    }
+                  }}
+                >
+                  <Trash2 />
+                  Remove…
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <ShareStatusDialog
+              requestId={request.id}
+              title={request.title}
+              open={sharing}
+              onOpenChange={setSharing}
+              onError={setError}
+            />
+          </>
         )}
       </div>
     </li>
@@ -574,12 +611,5 @@ function SlotDot({ slot }: { slot: FilamentSlot }) {
   ]
     .filter(Boolean)
     .join(' · ')
-  return (
-    <span
-      title={label}
-      aria-label={label}
-      className="inline-block size-3 rounded-full ring-1 ring-inset ring-[var(--color-border)]"
-      style={{ backgroundColor: slot.colorHex ?? 'transparent' }}
-    />
-  )
+  return <Swatch color={slot.colorHex} title={label} label={label} />
 }

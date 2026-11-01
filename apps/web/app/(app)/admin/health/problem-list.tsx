@@ -7,6 +7,7 @@ import { AlertTriangle, EyeOff, Info, Loader2, OctagonAlert, RotateCcw, Check } 
 import { PROBLEM_META, type ProblemKind, type ProblemSeverity } from '@pb/core/health'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
+import { Checkbox } from '@/components/ui/checkbox'
 import { ignore, ignoreWholeKind, resolve, unignore } from './actions'
 
 /**
@@ -57,11 +58,20 @@ export function ProblemList({
 
   const allSelected = problems.length > 0 && selected.size === problems.length
 
-  function toggle(id: string) {
+  /*
+   * One row per model (and file), listing everything wrong with it, rather
+   * than the same model once per problem. Selecting the row selects all of
+   * them; the order is that of each model's first problem.
+   */
+  const groups = groupProblems(problems)
+
+  function toggleAll(ids: string[], on: boolean) {
     setSelected((current) => {
       const next = new Set(current)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
+      for (const id of ids) {
+        if (on) next.add(id)
+        else next.delete(id)
+      }
       return next
     })
   }
@@ -96,8 +106,7 @@ export function ProblemList({
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
         <label className="flex items-center gap-2 text-sm text-[var(--color-ink-muted)]">
-          <input
-            type="checkbox"
+          <Checkbox
             checked={allSelected}
             onChange={() =>
               setSelected(allSelected ? new Set() : new Set(problems.map((p) => p.id)))
@@ -139,48 +148,60 @@ export function ProblemList({
 
       <Card className="overflow-hidden">
         <ul className="divide-y divide-[var(--color-border)]">
-          {problems.map((problem) => {
-            const Icon = SEVERITY_ICON[problem.severity]
+          {groups.map((group) => {
+            const first = group[0]!
+            const severity = worst(group)
+            const Icon = SEVERITY_ICON[severity]
+            const ids = group.map((problem) => problem.id)
+            const checked = ids.every((id) => selected.has(id))
+            const ignored = group.every((problem) => problem.ignored)
             return (
               <li
-                key={problem.id}
-                className={`flex items-start gap-3 px-4 py-2.5 ${problem.ignored ? 'opacity-55' : ''}`}
+                key={first.id}
+                className={`flex items-start gap-3 px-4 py-2.5 ${ignored ? 'opacity-55' : ''}`}
               >
-                <input
-                  type="checkbox"
-                  className="mt-1"
-                  checked={selected.has(problem.id)}
-                  onChange={() => toggle(problem.id)}
-                  aria-label={`Select ${problem.modelName ?? 'problem'}`}
+                <Checkbox
+                  className="mt-0.5"
+                  checked={checked}
+                  onChange={() => toggleAll(ids, !checked)}
+                  aria-label={`Select ${first.modelName ?? 'problem'}`}
                 />
-                <Icon className={`mt-0.5 size-4 shrink-0 ${SEVERITY_CLASS[problem.severity]}`} />
+                <Icon className={`mt-0.5 size-4 shrink-0 ${SEVERITY_CLASS[severity]}`} />
 
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-x-2 text-sm">
-                    {problem.modelPublicId ? (
+                    {first.modelPublicId ? (
                       <Link
-                        href={`/models/${problem.modelPublicId}`}
+                        href={`/models/${first.modelPublicId}`}
                         className="truncate font-medium hover:underline"
                       >
-                        {problem.modelName}
+                        {first.modelName}
                       </Link>
                     ) : (
-                      <span className="font-medium">{problem.modelName ?? 'Library'}</span>
+                      <span className="font-medium">{first.modelName ?? 'Library'}</span>
                     )}
                     <span className="text-xs text-[var(--color-ink-muted)]">
-                      {PROBLEM_META[problem.kind].label}
+                      {group
+                        .map(
+                          (problem) =>
+                            PROBLEM_META[problem.kind].label +
+                            (problem.ignored && !ignored ? ' (ignored)' : ''),
+                        )
+                        .join(' · ')}
                     </span>
-                    {problem.ignored && (
+                    {ignored && (
                       <span className="text-xs text-[var(--color-ink-faint)]">ignored</span>
                     )}
                   </div>
 
-                  {(problem.filename || problem.libraryName) && (
+                  {(first.filename || first.libraryName) && (
                     <p className="truncate text-xs text-[var(--color-ink-faint)]">
-                      {[problem.libraryName, problem.filename].filter(Boolean).join(' · ')}
+                      {[first.libraryName, first.filename].filter(Boolean).join(' · ')}
                     </p>
                   )}
-                  <Detail kind={problem.kind} detail={problem.detail} />
+                  {group.map((problem) => (
+                    <Detail key={problem.id} kind={problem.kind} detail={problem.detail} />
+                  ))}
                 </div>
               </li>
             )
@@ -195,6 +216,29 @@ export function ProblemList({
       )}
     </div>
   )
+}
+
+const SEVERITY_RANK: Record<ProblemSeverity, number> = { danger: 2, warning: 1, info: 0 }
+
+function worst(group: ProblemView[]): ProblemSeverity {
+  return group.reduce<ProblemSeverity>(
+    (most, problem) =>
+      SEVERITY_RANK[problem.severity] > SEVERITY_RANK[most] ? problem.severity : most,
+    'info',
+  )
+}
+
+function groupProblems(problems: ProblemView[]): ProblemView[][] {
+  const groups = new Map<string, ProblemView[]>()
+  for (const problem of problems) {
+    const key = problem.modelPublicId
+      ? `${problem.modelPublicId}|${problem.filename ?? ''}`
+      : problem.id
+    const group = groups.get(key)
+    if (group) group.push(problem)
+    else groups.set(key, [problem])
+  }
+  return [...groups.values()]
 }
 
 /** The kind-specific bit worth reading — what else shares the bytes, which folder. */

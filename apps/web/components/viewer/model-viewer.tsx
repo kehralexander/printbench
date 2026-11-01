@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Box, Grid3x3, Loader2, RotateCcw, RulerDimensionLine, TriangleAlert } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { formatDimensions } from '@/components/model/model-card'
+import { formatBytes } from '@/lib/format'
 import { cn } from '@/lib/cn'
 import type { MeshFormat, MeshLoadResponse } from '@/workers/mesh-loader.worker'
 
@@ -410,7 +411,7 @@ export function ModelViewer({
                 {/* break-words: the filename leads the sentence and a long one
                     has no break opportunity to wrap on. */}
                 <p className="max-w-xs break-words text-sm text-[var(--color-ink-muted)]">
-                  {filename} is {formatSize(fileSize)}. Loading a mesh this large can use a lot of
+                  {filename} is {formatBytes(fileSize)}. Loading a mesh this large can use a lot of
                   memory, so it is not opened automatically.
                 </p>
                 <Button size="sm" onClick={() => void start()}>
@@ -499,10 +500,4 @@ function ViewerButton({
       {children}
     </button>
   )
-}
-
-function formatSize(bytes: number): string {
-  const units = ['B', 'KB', 'MB', 'GB']
-  const exponent = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1)
-  return `${(bytes / 1024 ** exponent).toFixed(exponent === 0 ? 0 : 1)} ${units[exponent]}`
 }

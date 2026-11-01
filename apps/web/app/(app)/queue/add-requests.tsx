@@ -1,14 +1,17 @@
 'use client'
 
-import { useMemo, useState, useTransition } from 'react'
+import { useMemo, useState, useTransition, type ReactNode } from 'react'
 import { useRouter } from 'next/navigation'
-import { Loader2, Plus, X } from 'lucide-react'
+import { Loader2, Plus } from 'lucide-react'
 import { MAX_BULK_REQUESTS, parseRequestLines, type PrintRequestPriority } from '@pb/core/requests'
+import { PageHeader } from '@/components/shell/page-header'
 import { Button } from '@/components/ui/button'
-import { Card } from '@/components/ui/card'
+import { Dialog, DialogContent } from '@/components/ui/dialog'
 import { Field } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
+import { Textarea } from '@/components/ui/textarea'
+import { Callout } from '@/components/ui/callout'
 import type { FilamentOption } from '@/lib/filament-options'
 import { addRequests } from './actions'
 import { MaterialPicker, NO_MATERIAL, materialInput } from './request-fields'
@@ -25,10 +28,19 @@ import { MaterialPicker, NO_MATERIAL, materialInput } from './request-fields'
  * rules the user cannot see are rules they cannot trust. Showing the split
  * before it is saved turns "x4" from a guess into something they watched work.
  */
+/**
+ * The queue's page header and its "Add requests" panel. They share the open
+ * state, so the button can sit in the header like every other page's primary
+ * action while the form opens just below it.
+ */
 export function AddRequests({
+  title,
+  description,
   requesterSuggestions,
   filaments,
 }: {
+  title: string
+  description: ReactNode
   requesterSuggestions: string[]
   filaments: FilamentOption[]
 }) {
@@ -81,145 +93,146 @@ export function AddRequests({
     })
   }
 
-  if (!open) {
-    return (
-      <Button onClick={() => setOpen(true)}>
-        <Plus />
-        Add requests
-      </Button>
-    )
+  const header = (
+    <PageHeader
+      title={title}
+      description={description}
+      actions={
+        <Button onClick={() => setOpen(true)}>
+          <Plus />
+          Add requests
+        </Button>
+      }
+    />
+  )
+
+  function close() {
+    setOpen(false)
+    setError(null)
+    setNotice(null)
   }
 
   return (
-    <Card>
-      <div className="space-y-4 p-4">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <h2 className="text-sm font-semibold">Add to the queue</h2>
-            <p className="mt-0.5 text-xs text-[var(--color-ink-muted)]">
-              One thing per line. Add a count with &ldquo;x4&rdquo; at either end, and anything
-              whose name matches a model exactly is linked to it automatically.
-            </p>
-          </div>
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label="Close"
-            onClick={() => {
-              setOpen(false)
-              setError(null)
-              setNotice(null)
-            }}
-          >
-            <X />
-          </Button>
-        </div>
-
-        <Field label="What needs printing" htmlFor="queue-lines">
-          <textarea
-            id="queue-lines"
-            autoFocus
-            rows={5}
-            value={text}
-            onChange={(event) => setText(event.target.value)}
-            placeholder={'Articulated dragon\nCable clip x4\nSomething to hold the kitchen roll'}
-            className="w-full rounded-[var(--radius-control)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-ink)] placeholder:text-[var(--color-ink-faint)] transition-colors focus:border-[var(--color-accent)]"
-          />
-        </Field>
-
-        <div className="grid gap-3 sm:grid-cols-3">
-          <Field label="Requested by" htmlFor="queue-requester" hint="Optional">
-            <>
-              <Input
-                id="queue-requester"
-                list="queue-requester-options"
-                value={requestedBy}
-                onChange={(event) => setRequestedBy(event.target.value)}
-                placeholder="Whoever asked"
+    <>
+      {header}
+      {/* A dialog like every other form; it stays open after adding, for the next batch. */}
+      <Dialog open={open} onOpenChange={(next) => (next ? setOpen(true) : close())}>
+        <DialogContent
+          title="Add to the queue"
+          description="One thing per line. Add a count with “x4” at either end, and anything whose name matches a model exactly is linked to it automatically."
+          size="lg"
+        >
+          <div className="space-y-4">
+            <Field label="What needs printing" htmlFor="queue-lines">
+              <Textarea
+                id="queue-lines"
+                autoFocus
+                rows={5}
+                value={text}
+                onChange={(event) => setText(event.target.value)}
+                placeholder={
+                  'Articulated dragon\nCable clip x4\nSomething to hold the kitchen roll'
+                }
               />
-              {/* Names already in the queue, so the third request from the
+            </Field>
+
+            <div className="grid gap-3 sm:grid-cols-3">
+              <Field label="Requested by" htmlFor="queue-requester" hint="Optional">
+                <>
+                  <Input
+                    id="queue-requester"
+                    list="queue-requester-options"
+                    value={requestedBy}
+                    onChange={(event) => setRequestedBy(event.target.value)}
+                    placeholder="Whoever asked"
+                  />
+                  {/* Names already in the queue, so the third request from the
                   same person is a pick rather than a retype. */}
-              <datalist id="queue-requester-options">
-                {requesterSuggestions.map((name) => (
-                  <option key={name} value={name} />
-                ))}
-              </datalist>
-            </>
-          </Field>
+                  <datalist id="queue-requester-options">
+                    {requesterSuggestions.map((name) => (
+                      <option key={name} value={name} />
+                    ))}
+                  </datalist>
+                </>
+              </Field>
 
-          <Field label="Priority" htmlFor="queue-priority">
-            <Select
-              id="queue-priority"
-              value={priority}
-              onChange={(event) => setPriority(event.target.value as PrintRequestPriority)}
-            >
-              <option value="high">Urgent</option>
-              <option value="normal">Normal</option>
-              <option value="low">Whenever</option>
-            </Select>
-          </Field>
+              <Field label="Priority" htmlFor="queue-priority">
+                <Select
+                  id="queue-priority"
+                  value={priority}
+                  onChange={(event) => setPriority(event.target.value as PrintRequestPriority)}
+                >
+                  <option value="high">Urgent</option>
+                  <option value="normal">Normal</option>
+                  <option value="low">Whenever</option>
+                </Select>
+              </Field>
 
-          <Field label="Needed by" htmlFor="queue-due" hint="Optional">
-            <Input
-              id="queue-due"
-              type="date"
-              value={dueAt}
-              onChange={(event) => setDueAt(event.target.value)}
-            />
-          </Field>
-        </div>
+              <Field label="Needed by" htmlFor="queue-due" hint="Optional">
+                <Input
+                  id="queue-due"
+                  type="date"
+                  value={dueAt}
+                  onChange={(event) => setDueAt(event.target.value)}
+                />
+              </Field>
+            </div>
 
-        <div className="grid gap-3 sm:grid-cols-2">
-          <MaterialPicker
-            key={pickerKey}
-            value={material}
-            onChange={setMaterial}
-            options={filaments}
-          />
-          <Field label="Notes" htmlFor="queue-notes" hint="Optional, for every line above">
-            <textarea
-              rows={2}
-              value={notes}
-              onChange={(event) => setNotes(event.target.value)}
-              placeholder="Infill, supports, who to hand it to…"
-              className="w-full rounded-[var(--radius-control)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-ink)] placeholder:text-[var(--color-ink-faint)] transition-colors focus:border-[var(--color-accent)]"
-            />
-          </Field>
-        </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <MaterialPicker
+                key={pickerKey}
+                value={material}
+                onChange={setMaterial}
+                options={filaments}
+              />
+              <Field label="Notes" htmlFor="queue-notes" hint="Optional, for every line above">
+                <Textarea
+                  rows={2}
+                  value={notes}
+                  onChange={(event) => setNotes(event.target.value)}
+                  placeholder="Infill, supports, who to hand it to…"
+                />
+              </Field>
+            </div>
 
-        {parsed.length > 0 && (
-          <div className="rounded-[var(--radius-control)] bg-[var(--color-surface-2)] p-3">
-            <p className="text-xs font-medium text-[var(--color-ink-muted)]">
-              {parsed.length} request{parsed.length === 1 ? '' : 's'} will be added
-              {parsed.length === MAX_BULK_REQUESTS && ' (the most that can go in at once)'}
-            </p>
-            <ul className="mt-1.5 space-y-0.5">
-              {parsed.map((line, index) => (
-                <li key={index} className="truncate text-xs text-[var(--color-ink)]">
-                  {line.title}
-                  {line.quantity > 1 && (
-                    <span className="text-[var(--color-ink-faint)]"> × {line.quantity}</span>
-                  )}
-                </li>
-              ))}
-            </ul>
+            {parsed.length > 0 && (
+              <Callout
+                title={
+                  <>
+                    {parsed.length} request{parsed.length === 1 ? '' : 's'} will be added
+                    {parsed.length === MAX_BULK_REQUESTS && ' (the most that can go in at once)'}
+                  </>
+                }
+              >
+                <ul className="space-y-0.5">
+                  {parsed.map((line, index) => (
+                    <li key={index} className="truncate text-xs text-[var(--color-ink)]">
+                      {line.title}
+                      {line.quantity > 1 && (
+                        <span className="text-[var(--color-ink-faint)]"> × {line.quantity}</span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </Callout>
+            )}
+
+            {error && <p className="text-sm text-[var(--color-danger)]">{error}</p>}
+            {notice && <p className="text-sm text-[var(--color-success)]">{notice}</p>}
+
+            <div className="flex justify-end gap-2">
+              <Button variant="ghost" onClick={close}>
+                Close
+              </Button>
+              <Button disabled={pending || parsed.length === 0} onClick={submit}>
+                {pending ? <Loader2 className="animate-spin" /> : <Plus />}
+                Add {parsed.length > 0 ? parsed.length : ''} to queue
+              </Button>
+            </div>
           </div>
-        )}
-
-        {error && <p className="text-sm text-[var(--color-danger)]">{error}</p>}
-        {notice && <p className="text-sm text-[var(--color-success)]">{notice}</p>}
-
-        <div className="flex items-center gap-2">
-          <Button disabled={pending || parsed.length === 0} onClick={submit}>
-            {pending ? <Loader2 className="animate-spin" /> : <Plus />}
-            Add {parsed.length > 0 ? parsed.length : ''} to queue
-          </Button>
-          <Button variant="ghost" onClick={() => setOpen(false)}>
-            Done
-          </Button>
-        </div>
-      </div>
-    </Card>
+        </DialogContent>
+      </Dialog>
+    </>
   )
 }
 

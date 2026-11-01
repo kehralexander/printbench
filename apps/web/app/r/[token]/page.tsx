@@ -5,6 +5,7 @@ import { getDb } from '@pb/db'
 import { AutoRefresh } from '@/components/ui/auto-refresh'
 import { Card } from '@/components/ui/card'
 import { ClockTime } from '@/components/ui/clock-time'
+import { PageHeader } from '@/components/shell/page-header'
 import { LiveProgressBar } from '@/components/printer/live-progress'
 
 export const dynamic = 'force-dynamic'
@@ -50,21 +51,19 @@ export default async function RequestStatusPage({
       {request.status !== 'done' && request.status !== 'cancelled' && (
         <AutoRefresh intervalMs={REFRESH_MS} />
       )}
-      <p className="text-xs uppercase tracking-wide text-[var(--color-ink-faint)]">
-        Print request · {siteName}
-      </p>
-      <h1 className="mt-1 text-2xl font-semibold tracking-tight">{request.title}</h1>
-      <p className="mt-1 text-sm text-[var(--color-ink-muted)]">
-        {[
+      <PageHeader
+        eyebrow={`Print request · ${siteName}`}
+        title={request.title}
+        description={[
           request.requestedBy && `For ${request.requestedBy}`,
           request.quantity > 1 && `${request.printsDone} of ${request.quantity} printed`,
           [request.material, request.colorName].filter(Boolean).join(' · '),
         ]
           .filter(Boolean)
           .join(' · ')}
-      </p>
+      />
 
-      <Card className="mt-6 space-y-3 p-5">
+      <Card className="space-y-3 p-5">
         {request.status === 'requested' && (
           <>
             <Headline icon={<Hourglass />} text="Waiting to be printed" />

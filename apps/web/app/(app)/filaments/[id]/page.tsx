@@ -1,4 +1,3 @@
-import Link from 'next/link'
 import { notFound, redirect } from 'next/navigation'
 import { getSessionUser } from '@pb/auth'
 import {
@@ -11,7 +10,8 @@ import {
 } from '@pb/core'
 import { getDb } from '@pb/db'
 import { NotPermitted } from '@/components/shell/not-permitted'
-import { PageHeader } from '@/components/shell/page-header'
+import { spoolSubtitle } from '../spool-label'
+import { Breadcrumbs } from '@/components/shell/breadcrumbs'
 import { SpoolDetails } from '../spool-details'
 export const dynamic = 'force-dynamic'
 export const metadata = { title: 'Spool' }
@@ -31,16 +31,10 @@ export default async function SpoolPage({ params }: { params: Promise<{ id: stri
   ])
   return (
     <>
-      <Link href="/filaments" className="mb-4 inline-block text-sm text-[var(--color-accent)]">
-        ← Filaments
-      </Link>
-      <PageHeader
-        title={spool.label || spool.filament.name}
-        description={[spool.filament.brand, spool.filament.material, spool.filament.colorName]
-          .filter(Boolean)
-          .join(' · ')}
-      />
+      <Breadcrumbs items={[{ label: 'Filaments', href: '/filaments' }]} />
       <SpoolDetails
+        title={spool.label || spool.filament.name}
+        description={spoolSubtitle(spool)}
         spool={spool}
         filaments={filaments}
         history={history}

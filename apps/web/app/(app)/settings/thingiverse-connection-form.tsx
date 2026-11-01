@@ -3,6 +3,8 @@
 import { useState, useTransition } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Field } from '@/components/ui/field'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { setThingiverseToken } from './thingiverse-actions'
 
 export function ThingiverseConnectionForm({ initialSaved }: { initialSaved: boolean }) {
@@ -30,65 +32,63 @@ export function ThingiverseConnectionForm({ initialSaved }: { initialSaved: bool
   }
 
   return (
-    <section
-      id="thingiverse"
-      aria-labelledby="thingiverse-heading"
-      className="space-y-4 rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface)] p-6"
-    >
-      <div>
-        <h2 id="thingiverse-heading" className="text-lg font-semibold">
-          Thingiverse
-        </h2>
-        <p className="mt-1 text-sm text-[var(--color-ink-muted)]">
+    <Card id="thingiverse" role="region" aria-labelledby="thingiverse-heading">
+      <CardHeader>
+        <CardTitle id="thingiverse-heading">Thingiverse</CardTitle>
+        <CardDescription>
           Save your own Thingiverse API token to import model links. It is saved for your PrintBench
           account and never shown again. See{' '}
           <a
             href="https://www.thingiverse.com/developers"
             target="_blank"
             rel="noopener noreferrer"
-            className="underline"
+            className="text-[var(--color-accent)] hover:underline"
           >
             Thingiverse’s developer documentation
           </a>{' '}
           to create an app and obtain a token.
-        </p>
-      </div>
-      <p className="text-sm">API token: {saved ? 'Saved' : 'Not saved'}</p>
-      <form
-        className="space-y-3"
-        onSubmit={(event) => {
-          event.preventDefault()
-          updateToken(token)
-        }}
-      >
-        <label className="block space-y-1 text-sm">
-          <span>API token</span>
-          <Input
-            type="password"
-            autoComplete="off"
-            spellCheck={false}
-            value={token}
-            onChange={(event) => setToken(event.target.value)}
-            disabled={pending}
-          />
-        </label>
-        <div className="flex gap-2">
-          <Button type="submit" variant="secondary" disabled={pending || !token.trim()}>
-            {pending ? 'Updating…' : 'Save API token'}
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            disabled={pending || !saved}
-            onClick={() => updateToken('')}
-          >
-            Remove API token
-          </Button>
-        </div>
-        <p role="status" aria-live="polite" className="text-sm">
-          {message}
-        </p>
-      </form>
-    </section>
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <p className="text-sm">API token: {saved ? 'Saved' : 'Not saved'}</p>
+        <form
+          className="space-y-3"
+          onSubmit={(event) => {
+            event.preventDefault()
+            updateToken(token)
+          }}
+        >
+          <Field label="API token" htmlFor="thingiverse-token">
+            <Input
+              type="password"
+              autoComplete="off"
+              spellCheck={false}
+              value={token}
+              onChange={(event) => setToken(event.target.value)}
+              disabled={pending}
+            />
+          </Field>
+          <div className="flex gap-2">
+            <Button type="submit" disabled={pending || !token.trim()}>
+              {pending ? 'Updating…' : 'Save API token'}
+            </Button>
+            {/* Only once there is one: a greyed-out "Remove" said nothing useful. */}
+            {saved && (
+              <Button
+                type="button"
+                variant="ghost"
+                disabled={pending}
+                onClick={() => updateToken('')}
+              >
+                Remove API token
+              </Button>
+            )}
+          </div>
+          <p role="status" aria-live="polite" className="text-sm">
+            {message}
+          </p>
+        </form>
+      </CardContent>
+    </Card>
   )
 }

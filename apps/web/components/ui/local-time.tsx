@@ -1,5 +1,7 @@
 'use client'
 
+import { formatDate } from '@/lib/format'
+
 /**
  * A timestamp in the reader's own time zone.
  *
@@ -19,10 +21,10 @@ export function LocalTime({
   const date = new Date(value)
   return (
     <time dateTime={value} title={value} className={className} suppressHydrationWarning>
-      {date.toLocaleString(undefined, {
-        year: 'numeric',
-        month: 'short',
-        day: 'numeric',
+      {/* The date written as formatDate writes it everywhere else ("1 Nov
+          2026"); the time in the reader's own 12- or 24-hour clock. */}
+      {formatDate(date)},{' '}
+      {date.toLocaleTimeString(undefined, {
         hour: '2-digit',
         minute: '2-digit',
         ...(seconds ? { second: '2-digit' } : {}),

@@ -1,13 +1,48 @@
 'use client'
 
-import { useState } from 'react'
+import { createContext, useContext, useState, type ReactNode } from 'react'
 import { ChevronDown, ChevronRight, Folder } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
+import { Card } from '@/components/ui/card'
+import { SectionHeader } from '@/components/ui/section-header'
+import { SortControl } from '@/components/ui/sort-control'
+import { ListToolbar } from '@/components/ui/list-toolbar'
+import { compareText, type SortOption } from '@/lib/sort'
 import { formatBytes } from '@/components/model/model-card'
 import { FileDownloadLink } from './file-download-link'
 import { OpenInSlicer } from './open-in-slicer'
 import { SendToPrinter } from './send-to-printer'
 import { compareFiles, compareFolders, orderTopLevel } from './file-tree-order'
+
+export type FileSort = 'default' | 'name' | 'largest'
+
+const FILE_SORTS: SortOption<FileSort>[] = [
+  { value: 'default', label: '3MF first' },
+  { value: 'name', label: 'Name' },
+  { value: 'largest', label: 'Largest' },
+]
+
+/** The chosen order, read by every folder in the tree however deep. */
+const SortContext = createContext<FileSort>('default')
+
+const fileComparators: Record<FileSort, (a: TreeFile, b: TreeFile) => number> = {
+  default: compareFiles,
+  name: (a, b) => compareText(a.displayName ?? a.filename, b.displayName ?? b.filename),
+  largest: (a, b) => Number(b.size) - Number(a.size),
+}
+
+/** A folder's size is everything inside it, so "Largest" puts the heavy folders first too. */
+function folderSize(node: TreeNode): number {
+  let total = node.files.reduce((sum, file) => sum + Number(file.size), 0)
+  for (const child of node.folders.values()) total += folderSize(child)
+  return total
+}
+
+const folderComparators: Record<FileSort, (a: TreeNode, b: TreeNode) => number> = {
+  default: compareFolders,
+  name: (a, b) => compareText(a.name, b.name),
+  largest: (a, b) => folderSize(b) - folderSize(a),
+}
 
 export type TreeFile = {
   id: string
@@ -89,9 +124,10 @@ function FileRow({ file, depth }: { file: TreeFile; depth: number }) {
       }
       style={{ paddingLeft: `${16 + depth * 20}px` }}
     >
-      <span className="w-10 shrink-0 rounded bg-[var(--color-surface-2)] px-1.5 py-0.5 text-center text-[10px] font-medium uppercase text-[var(--color-ink-faint)]">
+      {/* The same file-type badge as the public share page. */}
+      <Badge className="min-w-12 shrink-0 justify-center uppercase">
         {file.extension || 'Unknown'}
-      </span>
+      </Badge>
 
       {file.thumbUrl && (
         // eslint-disable-next-line @next/next/no-img-element
@@ -141,10 +177,11 @@ function FolderNode({ node, depth }: { node: TreeNode; depth: number }) {
    * Their children (ARM, BODY, HELMET, etc.) start collapsed.
    */
   const [expanded, setExpanded] = useState(depth === 0)
+  const sort = useContext(SortContext)
   const total = countFiles(node)
 
-  const folders = [...node.folders.values()].sort(compareFolders)
-  const files = [...node.files].sort(compareFiles)
+  const folders = [...node.folders.values()].sort(folderComparators[sort])
+  const files = [...node.files].sort(fileComparators[sort])
 
   return (
     <li>
@@ -183,7 +220,36 @@ function FolderNode({ node, depth }: { node: TreeNode; depth: number }) {
   )
 }
 
-export function FileTree({ files }: { files: TreeFile[] }) {
+/**
+ * One category of a model's files — its heading with the sort, and the tree.
+ */
+export function FileSection({
+  title,
+  icon,
+  files,
+}: {
+  title: ReactNode
+  icon: ReactNode
+  files: TreeFile[]
+}) {
+  const [sort, setSort] = useState<FileSort>('default')
+  return (
+    <section>
+      <SectionHeader icon={icon} title={title} />
+      {/* On its own row directly above the list, as on every other page. */}
+      <ListToolbar
+        sort={
+          <SortControl options={FILE_SORTS} value={sort} onChange={setSort} count={files.length} />
+        }
+      />
+      <Card className="overflow-hidden">
+        <FileTree files={files} sort={sort} />
+      </Card>
+    </section>
+  )
+}
+
+export function FileTree({ files, sort = 'default' }: { files: TreeFile[]; sort?: FileSort }) {
   const tree = buildTree(files)
 
   /*
@@ -211,15 +277,20 @@ export function FileTree({ files }: { files: TreeFile[] }) {
 
   const rootGroups = [...extensionGroups.values()]
   const folders = [...tree.folders.values()]
-  const topLevelNodes = orderTopLevel(rootGroups, folders)
+  const topLevelNodes =
+    sort === 'default'
+      ? orderTopLevel(rootGroups, folders)
+      : [...rootGroups, ...folders].sort(folderComparators[sort])
 
   return (
-    <ul>
-      {topLevelNodes.map((node) => {
-        const prefix = rootGroups.includes(node) ? 'extension' : 'folder'
+    <SortContext.Provider value={sort}>
+      <ul>
+        {topLevelNodes.map((node) => {
+          const prefix = rootGroups.includes(node) ? 'extension' : 'folder'
 
-        return <FolderNode key={`${prefix}-${node.name}`} node={node} depth={0} />
-      })}
-    </ul>
+          return <FolderNode key={`${prefix}-${node.name}`} node={node} depth={0} />
+        })}
+      </ul>
+    </SortContext.Provider>
   )
 }

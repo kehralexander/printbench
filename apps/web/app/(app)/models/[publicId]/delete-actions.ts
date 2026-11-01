@@ -16,6 +16,7 @@ import {
 import { requireUser } from '@pb/auth'
 import { getDb, schema } from '@pb/db'
 import { audit } from '@/lib/audit'
+import { formatBytes } from '@/lib/format'
 
 type Result = { ok: true; message: string } | { ok: false; error: string }
 
@@ -157,11 +158,4 @@ function fail(error: unknown, fallback: string): Result {
   if (error instanceof PolicyError) return { ok: false, error: 'Not permitted.' }
   console.error('[delete]', error)
   return { ok: false, error: fallback }
-}
-
-function formatBytes(bytes: number): string {
-  if (!bytes) return '0 B'
-  const units = ['B', 'KB', 'MB', 'GB', 'TB']
-  const exponent = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1)
-  return `${(bytes / 1024 ** exponent).toFixed(exponent === 0 ? 0 : 1)} ${units[exponent]}`
 }

@@ -1,9 +1,19 @@
+import type { ReactNode } from 'react'
 import Link from 'next/link'
 import type { Route } from 'next'
 import { notFound } from 'next/navigation'
 import { headers } from 'next/headers'
 import { sql } from 'drizzle-orm'
-import { Box, Boxes, FileStack, FolderOpen, HardDrive, Layers, Package } from 'lucide-react'
+import {
+  AlertTriangle,
+  Box,
+  Boxes,
+  FileStack,
+  FolderOpen,
+  HardDrive,
+  Layers,
+  Package,
+} from 'lucide-react'
 import { getDb } from '@pb/db'
 import { filamentOptions } from '@/lib/filament-options'
 import { getSessionUser } from '@pb/auth'
@@ -24,22 +34,22 @@ import {
   spoolmanEnabled,
 } from '@pb/core'
 import { PageHeader } from '@/components/shell/page-header'
-import { Card, CardContent } from '@/components/ui/card'
+import { Breadcrumbs } from '@/components/shell/breadcrumbs'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { AutoRefresh } from '@/components/ui/auto-refresh'
+import { Callout } from '@/components/ui/callout'
+import { SectionHeader } from '@/components/ui/section-header'
 import { formatBytes, formatDimensions } from '@/components/model/model-card'
 import { ModelPreview } from '@/components/viewer/model-preview'
 import { DownloadModelButton } from './download-button'
 import { ModelEditor } from './model-editor'
-import { FileTree } from './file-tree'
+import { FileSection } from './file-tree'
 import { PrintHistory } from './print-history'
-import { ShareButton } from './share-button'
-import { DeleteButton } from './delete-button'
-import { MoveButton } from './move-button'
+import { MoreActions } from './more-actions'
 import { LikeButton } from './like-button'
 import { CollectionPicker } from './collection-picker'
 import { QueueButton } from './queue-button'
-import { AddFilesButton } from './add-files-button'
 
 export const dynamic = 'force-dynamic'
 
@@ -175,8 +185,17 @@ export default async function ModelPage({ params }: { params: Promise<{ publicId
     ORDER BY position, id
   `)
 
-  const sourceLink = modelLinks.rows.find((link) => link.title === 'Original model page')
-  const additionalLinks = modelLinks.rows.filter((link) => link.title !== 'Original model page')
+  // Links are typed in by people and imported from other sites, so only web
+  // addresses become anchors; the editor still gets every row to fix them.
+  const safeLinks = modelLinks.rows.filter((link) => {
+    try {
+      return ['https:', 'http:'].includes(new URL(link.url).protocol)
+    } catch {
+      return false
+    }
+  })
+  const sourceLink = safeLinks.find((link) => link.title === 'Original model page')
+  const additionalLinks = safeLinks.filter((link) => link !== sourceLink)
 
   // Grouping by category makes a 40-file model legible; a flat list does not.
   const byCategory = new Map<string, FileRow[]>()
@@ -201,28 +220,19 @@ export default async function ModelPage({ params }: { params: Promise<{ publicId
 
   const meta = await db.execute<{
     creator: string | null
-    creator_id: string | null
-    tags: string[] | null
+    creator_slug: string | null
+    tags: { name: string; slug: string }[] | null
   }>(sql`
-    SELECT c.name AS creator, c.id AS creator_id,
-           (SELECT array_agg(t.name ORDER BY t.name) FROM model_tags mt
+    SELECT c.name AS creator, c.slug AS creator_slug,
+           (SELECT json_agg(json_build_object('name', t.name, 'slug', t.slug) ORDER BY t.name)
+              FROM model_tags mt
               JOIN tags t ON t.id = mt.tag_id WHERE mt.model_id = m.id) AS tags
     FROM models m LEFT JOIN creators c ON c.id = m.creator_id
     WHERE m.id = ${model.id}
   `)
   const creator = meta.rows[0]?.creator ?? null
-  const creatorId = meta.rows[0]?.creator_id ?? null
+  const creatorSlug = meta.rows[0]?.creator_slug ?? null
   const tags = meta.rows[0]?.tags ?? []
-  const sources = await db.execute<{ url: string; title: string | null }>(sql`
-    SELECT url, title FROM model_links WHERE model_id = ${model.id} ORDER BY position, url
-  `)
-  const safeSources = sources.rows.filter((source) => {
-    try {
-      return ['https:', 'http:'].includes(new URL(source.url).protocol)
-    } catch {
-      return false
-    }
-  })
 
   const user = await getSessionUser()
   const policyUser = { id: user?.id ?? '', role: user?.role ?? null }
@@ -252,6 +262,21 @@ export default async function ModelPage({ params }: { params: Promise<{ publicId
    */
   const rendering = files.rows.some((f) => f.thumb_state === 'pending' && !f.missing_at)
   const printing = prints.some((print) => print.status === 'in_progress')
+
+  // The same test listMoveTargets starts with, so "Move to library…" is only
+  // offered when there is a library that could take the model.
+  const canMoveSomewhere =
+    canEdit &&
+    !model.is_package &&
+    (
+      await db.execute<{ one: number }>(sql`
+        SELECT 1 AS one FROM libraries
+        WHERE id <> ${model.library_id}
+          AND (kind = 'managed' OR allow_writes)
+          AND (CASE WHEN backend = 's3' THEN NULLIF(s3_bucket, '') IS NOT NULL ELSE NULLIF(path, '') IS NOT NULL END)
+        LIMIT 1
+      `)
+    ).rows.length > 0
 
   const canCollect = can(policyUser, 'collection:edit')
   const allCollections = canCollect ? await listCollections(db) : []
@@ -330,24 +355,14 @@ export default async function ModelPage({ params }: { params: Promise<{ publicId
       {(rendering || printing) && (
         <AutoRefresh intervalMs={rendering ? RENDERING_REFRESH_MS : PRINTING_REFRESH_MS} />
       )}
-      <nav className="mb-4 flex items-center gap-1.5 text-sm text-[var(--color-ink-muted)]">
-        <Link href="/models" className="hover:text-[var(--color-ink)]">
-          Models
-        </Link>
-        {parentPackage && (
-          <>
-            <span aria-hidden>/</span>
-            <Link
-              href={`/models/${parentPackage.public_id}` as Route}
-              className="truncate hover:text-[var(--color-ink)]"
-            >
-              {parentPackage.name}
-            </Link>
-          </>
-        )}
-        <span aria-hidden>/</span>
-        <span className="truncate text-[var(--color-ink)]">{model.name}</span>
-      </nav>
+      <Breadcrumbs
+        items={[
+          { label: 'Models', href: '/models' },
+          ...(parentPackage
+            ? [{ label: parentPackage.name, href: `/models/${parentPackage.public_id}` }]
+            : []),
+        ]}
+      />
 
       <PageHeader
         title={model.name}
@@ -364,7 +379,8 @@ export default async function ModelPage({ params }: { params: Promise<{ publicId
               )}
               <Badge tone="neutral">
                 <FileStack className="size-3" />
-                {model.file_count} files · {formatBytes(Number(model.total_size))}
+                {model.file_count} {model.file_count === 1 ? 'file' : 'files'} ·{' '}
+                {formatBytes(Number(model.total_size))}
               </Badge>
               {user && <LikeButton publicId={model.public_id} liked={liked} />}
               {canQueue && !model.is_package && (
@@ -394,38 +410,6 @@ export default async function ModelPage({ params }: { params: Promise<{ publicId
                   memberOf={memberships.map((c) => c.id)}
                 />
               )}
-              {settings.publicSharing && canEdit && !model.is_package && (
-                <ShareButton
-                  publicId={model.public_id}
-                  shared={model.share_token != null}
-                  shareUrl={model.share_token ? `${appOrigin}/share/${model.share_token}` : null}
-                />
-              )}
-              {model.library_writable && can(policyUser, 'file:upload') && (
-                <AddFilesButton
-                  publicId={model.public_id}
-                  modelId={model.id}
-                  libraryId={model.library_id}
-                  isFileModel={model.is_file_model}
-                  fileName={model.path.split('/').pop() ?? model.name}
-                />
-              )}
-              {canEdit && !model.is_package && (
-                <MoveButton
-                  publicId={model.public_id}
-                  name={model.name}
-                  libraryName={model.library_name}
-                />
-              )}
-              {can(policyUser, 'model:delete') && !model.is_package && (
-                <DeleteButton
-                  publicId={model.public_id}
-                  name={model.name}
-                  libraryName={model.library_name}
-                  fileCount={model.file_count}
-                  canDeleteFiles={model.library_writable}
-                />
-              )}
               <ModelEditor
                 publicId={model.public_id}
                 canEdit={canEdit}
@@ -438,7 +422,7 @@ export default async function ModelPage({ params }: { params: Promise<{ publicId
                   commercialUse: model.commercial_use,
                   licenseNotes: model.license_notes,
                   creator,
-                  tags,
+                  tags: tags.map((tag) => tag.name),
                   links: modelLinks.rows.map((link) => ({
                     title: link.title,
                     url: link.url,
@@ -446,23 +430,55 @@ export default async function ModelPage({ params }: { params: Promise<{ publicId
                 }}
               />
               <DownloadModelButton publicId={model.public_id} />
+              <MoreActions
+                model={{
+                  publicId: model.public_id,
+                  name: model.name,
+                  libraryName: model.library_name,
+                }}
+                share={
+                  settings.publicSharing && canEdit && !model.is_package
+                    ? {
+                        shareUrl: model.share_token
+                          ? `${appOrigin}/share/${model.share_token}`
+                          : null,
+                      }
+                    : undefined
+                }
+                addFiles={
+                  model.library_writable && can(policyUser, 'file:upload')
+                    ? {
+                        modelId: model.id,
+                        libraryId: model.library_id,
+                        isFileModel: model.is_file_model,
+                        fileName: model.path.split('/').pop() ?? model.name,
+                      }
+                    : undefined
+                }
+                canMove={canMoveSomewhere}
+                remove={
+                  can(policyUser, 'model:delete') && !model.is_package
+                    ? { fileCount: model.file_count, canDeleteFiles: model.library_writable }
+                    : undefined
+                }
+              />
             </div>
           )
         }
       />
 
       {model.missing_at && (
-        <Card className="mb-6 border-[var(--color-danger)]">
-          <CardContent className="p-4 text-sm">
-            <p className="font-medium text-[var(--color-danger)]">
-              This model was not found during the last scan.
-            </p>
-            <p className="mt-1 text-[var(--color-ink-muted)]">
-              Its record is kept for 30 days in case the folder comes back. Nothing has been
-              deleted. If the drive is unmounted, remount it and scan again.
-            </p>
-          </CardContent>
-        </Card>
+        <Callout
+          tone="danger"
+          icon={<AlertTriangle />}
+          title="This model was not found during the last scan."
+          className="mb-6"
+        >
+          <p className="text-[var(--color-ink-muted)]">
+            Its record is kept for 30 days in case the folder comes back. Nothing has been deleted.
+            If the drive is unmounted, remount it and scan again.
+          </p>
+        </Callout>
       )}
 
       {/*
@@ -516,13 +532,15 @@ export default async function ModelPage({ params }: { params: Promise<{ publicId
 
           {model.is_package && packageChildren.rows.length > 0 && (
             <section>
-              <h2 className="mb-2 flex items-center gap-2 text-sm font-semibold">
-                <Boxes className="size-4" />
-                Models in this package
-                <span className="font-normal text-[var(--color-ink-faint)]">
-                  {packageChildren.rows.length}
-                </span>
-              </h2>
+              <SectionHeader
+                icon={<Boxes />}
+                title={
+                  <SectionCount
+                    label="Models in this package"
+                    count={packageChildren.rows.length}
+                  />
+                }
+              />
               <Card className="overflow-hidden">
                 <ul className="divide-y divide-[var(--color-border)]">
                   {packageChildren.rows.map((child) => (
@@ -539,7 +557,8 @@ export default async function ModelPage({ params }: { params: Promise<{ publicId
                           </span>
                         </span>
                         <span className="shrink-0 text-xs text-[var(--color-ink-muted)]">
-                          {child.file_count} files · {formatBytes(Number(child.total_size))}
+                          {child.file_count} {child.file_count === 1 ? 'file' : 'files'} ·{' '}
+                          {formatBytes(Number(child.total_size))}
                         </span>
                       </Link>
                     </li>
@@ -550,35 +569,31 @@ export default async function ModelPage({ params }: { params: Promise<{ publicId
           )}
 
           {CATEGORY_ORDER.filter((category) => byCategory.has(category)).map((category) => (
-            <section key={category}>
-              <h2 className="mb-2 flex items-center gap-2 text-sm font-semibold">
-                {category === 'model' ? <Box className="size-4" /> : <Layers className="size-4" />}
-                {CATEGORY_LABELS[category]}
-                <span className="font-normal text-[var(--color-ink-faint)]">
-                  {byCategory.get(category)!.length}
-                </span>
-              </h2>
-
-              <Card className="overflow-hidden">
-                <FileTree
-                  files={byCategory.get(category)!.map((file) => ({
-                    id: file.id,
-                    filename: file.filename,
-                    extension: file.extension,
-                    size: file.size,
-                    presupported: file.presupported,
-                    missing_at: file.missing_at,
-                    triangle_count: file.triangle_count,
-                    canOpenInSlicer: slicersFor(file.extension).length > 0,
-                    canSendToPrinter: canSend && canSendToPrinter(file.extension),
-                    thumbUrl:
-                      file.category === 'slicer' && file.thumb_state === 'ok' && file.thumb_key
-                        ? `/api/files/${file.id}/thumb?v=${encodeURIComponent(file.thumb_key)}`
-                        : null,
-                  }))}
+            <FileSection
+              key={category}
+              icon={category === 'model' ? <Box /> : <Layers />}
+              title={
+                <SectionCount
+                  label={CATEGORY_LABELS[category] ?? category}
+                  count={byCategory.get(category)!.length}
                 />
-              </Card>
-            </section>
+              }
+              files={byCategory.get(category)!.map((file) => ({
+                id: file.id,
+                filename: file.filename,
+                extension: file.extension,
+                size: file.size,
+                presupported: file.presupported,
+                missing_at: file.missing_at,
+                triangle_count: file.triangle_count,
+                canOpenInSlicer: slicersFor(file.extension).length > 0,
+                canSendToPrinter: canSend && canSendToPrinter(file.extension),
+                thumbUrl:
+                  file.category === 'slicer' && file.thumb_state === 'ok' && file.thumb_key
+                    ? `/api/files/${file.id}/thumb?v=${encodeURIComponent(file.thumb_key)}`
+                    : null,
+              }))}
+            />
           ))}
 
           {!model.is_package && (
@@ -606,194 +621,130 @@ export default async function ModelPage({ params }: { params: Promise<{ publicId
         </div>
 
         <aside className="min-w-0 space-y-4">
-          {safeSources.length > 0 && (
-            <Card>
-              <CardContent className="space-y-2 p-4 text-sm">
-                <h2 className="font-semibold">Source links</h2>
-                {safeSources.map((source) => (
-                  <a
-                    key={source.url}
-                    href={source.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="block break-words text-[var(--color-accent)] hover:underline"
-                  >
-                    {source.title || new URL(source.url).hostname}
-                  </a>
-                ))}
-              </CardContent>
-            </Card>
-          )}
           <Card>
-            <CardContent className="space-y-3 p-4 text-sm">
-              <p className="text-xs font-semibold uppercase tracking-wide text-[var(--color-ink-faint)]">
-                Model Information
-              </p>
-
-              <div>
-                <p className="text-xs font-medium uppercase tracking-wide text-[var(--color-ink-faint)]">
-                  Library
-                </p>
-                <p className="mt-0.5 flex items-center gap-1.5">
+            <CardHeader className="p-4 pb-2">
+              <CardTitle>Model information</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3 p-4 pt-0 text-sm">
+              <Meta label="Library">
+                <span className="flex items-center gap-1.5">
                   <HardDrive className="size-3.5 text-[var(--color-ink-faint)]" />
                   {model.library_name}
-                </p>
-              </div>
+                </span>
+              </Meta>
 
-              <div>
-                <p className="text-xs font-medium uppercase tracking-wide text-[var(--color-ink-faint)]">
-                  Folder
-                </p>
-                <p className="mt-0.5 flex items-start gap-1.5 break-all font-mono text-xs">
+              <Meta label="Folder">
+                <span className="flex items-start gap-1.5 break-all font-mono text-xs">
                   <FolderOpen className="mt-0.5 size-3.5 shrink-0 text-[var(--color-ink-faint)]" />
                   {model.path}
-                </p>
-              </div>
+                </span>
+              </Meta>
 
               {heroDimensions && (
-                <div>
-                  <p className="text-xs font-medium uppercase tracking-wide text-[var(--color-ink-faint)]">
-                    Size
-                  </p>
-                  <p className="mt-0.5 tabular-nums">{heroDimensions}</p>
-                </div>
+                <Meta label="Dimensions">
+                  <span className="tabular-nums">{heroDimensions}</span>
+                </Meta>
               )}
 
               {presupportedCount > 0 && (
-                <div>
-                  <p className="text-xs font-medium uppercase tracking-wide text-[var(--color-ink-faint)]">
-                    Supports
-                  </p>
-                  <p className="mt-0.5">{presupportedCount} pre-supported files</p>
-                </div>
+                <Meta label="Supports">{presupportedCount} pre-supported files</Meta>
               )}
 
               {creator && (
-                <div>
-                  <p className="text-xs font-medium uppercase tracking-wide text-[var(--color-ink-faint)]">
-                    Creator
-                  </p>
-                  <Link
-                    href={`/models?creator=${encodeURIComponent(creatorId ?? '')}` as Route}
-                    className="mt-0.5 block text-[var(--color-accent)] hover:underline"
-                  >
-                    {creator}
-                  </Link>
-                </div>
+                <Meta label="Creator">
+                  {creatorSlug ? (
+                    <Link
+                      href={`/creators/${creatorSlug}` as Route}
+                      className="text-[var(--color-accent)] hover:underline"
+                    >
+                      {creator}
+                    </Link>
+                  ) : (
+                    creator
+                  )}
+                </Meta>
               )}
 
               {sourceLink && (
-                <div>
-                  <p className="text-xs font-medium uppercase tracking-wide text-[var(--color-ink-faint)]">
-                    Source
-                  </p>
-                  <a
-                    href={sourceLink.url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="mt-0.5 block break-words text-[var(--color-accent)] hover:underline"
-                  >
-                    {sourceLink.title ?? sourceLink.host ?? 'Original model page'}
-                  </a>
-                </div>
+                <Meta label="Source">
+                  <ExternalLink link={sourceLink} />
+                </Meta>
               )}
 
               {memberships.length > 0 && (
-                <div>
-                  <p className="mb-1 text-xs font-medium uppercase tracking-wide text-[var(--color-ink-faint)]">
-                    Collections
-                  </p>
-                  <div className="flex flex-wrap gap-1">
+                <Meta label="Collections">
+                  <span className="flex flex-wrap gap-1">
                     {memberships.map((collection) => (
-                      <Link
-                        key={collection.id}
-                        href={`/collections/${collection.slug}` as Route}
-                        className="rounded-full bg-[var(--color-surface-2)] px-2 py-0.5 text-xs text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
-                      >
-                        {collection.name}
+                      <Link key={collection.id} href={`/collections/${collection.slug}` as Route}>
+                        <Badge className="hover:text-[var(--color-ink)]">{collection.name}</Badge>
                       </Link>
                     ))}
-                  </div>
-                </div>
+                  </span>
+                </Meta>
               )}
 
               {tags.length > 0 && (
-                <div>
-                  <p className="mb-1 text-xs font-medium uppercase tracking-wide text-[var(--color-ink-faint)]">
-                    Tags
-                  </p>
-                  <div className="flex flex-wrap gap-1">
+                <Meta label="Tags">
+                  <span className="flex flex-wrap gap-1">
                     {tags.map((tag) => (
-                      <Link
-                        key={tag}
-                        href={`/models?q=${encodeURIComponent(tag)}` as Route}
-                        className="rounded-full bg-[var(--color-surface-2)] px-2 py-0.5 text-xs text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
-                      >
-                        {tag}
+                      <Link key={tag.slug} href={`/tags/${tag.slug}` as Route}>
+                        <Badge className="hover:text-[var(--color-ink)]">{tag.name}</Badge>
                       </Link>
                     ))}
-                  </div>
-                </div>
+                  </span>
+                </Meta>
               )}
             </CardContent>
           </Card>
 
           <Card>
-            <CardContent className="space-y-3 p-4 text-sm">
-              <p className="text-xs font-semibold uppercase tracking-wide text-[var(--color-ink-faint)]">
-                Licence
-              </p>
-
-              <div>
-                {model.license_url ? (
-                  <a
-                    href={model.license_url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="mt-0.5 block break-words text-[var(--color-accent)] hover:underline"
-                  >
-                    {model.license ?? 'View licence'}
-                  </a>
-                ) : (
-                  <p className="mt-0.5 text-[var(--color-ink-muted)]">
-                    {model.license ?? 'Not recorded'}
-                  </p>
-                )}
-              </div>
-
-              <div>
-                <p className="text-xs font-medium uppercase tracking-wide text-[var(--color-ink-faint)]">
-                  Commercial use
-                </p>
-                <p
-                  className={
-                    model.commercial_use === true
-                      ? 'mt-0.5 text-[var(--color-success)]'
-                      : model.commercial_use === false
-                        ? 'mt-0.5 text-[var(--color-danger)]'
-                        : 'mt-0.5 text-[var(--color-ink-muted)]'
-                  }
+            <CardHeader className="p-4 pb-2">
+              <CardTitle>Licence</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3 p-4 pt-0 text-sm">
+              {model.license_url ? (
+                <a
+                  href={model.license_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="block break-words text-[var(--color-accent)] hover:underline"
                 >
-                  {model.commercial_use === true
-                    ? 'Licensed'
-                    : model.commercial_use === false
-                      ? 'Not permitted'
-                      : 'Not recorded'}
-                </p>
-              </div>
+                  {model.license ?? 'View licence'}
+                </a>
+              ) : (
+                <p className="text-[var(--color-ink-muted)]">{model.license ?? 'Not recorded'}</p>
+              )}
+
+              {/* With nothing recorded at all, one "Not recorded" says it. */}
+              {(model.commercial_use != null || model.license || model.license_url) && (
+                <Meta label="Commercial use">
+                  <span
+                    className={
+                      model.commercial_use === true
+                        ? 'text-[var(--color-success)]'
+                        : model.commercial_use === false
+                          ? 'text-[var(--color-danger)]'
+                          : 'text-[var(--color-ink-muted)]'
+                    }
+                  >
+                    {model.commercial_use === true
+                      ? 'Licensed'
+                      : model.commercial_use === false
+                        ? 'Not permitted'
+                        : 'Not recorded'}
+                  </span>
+                </Meta>
+              )}
 
               {licenceExpiry && (
-                <div>
-                  <p className="text-xs font-medium uppercase tracking-wide text-[var(--color-ink-faint)]">
-                    Expiry
-                  </p>
-                  <p
+                <Meta label="Expiry">
+                  <span
                     className={
                       licenceExpiry.expired
-                        ? 'mt-0.5 text-[var(--color-danger)]'
+                        ? 'text-[var(--color-danger)]'
                         : licenceExpiry.expiringSoon
-                          ? 'mt-0.5 text-[var(--color-warning)]'
-                          : 'mt-0.5'
+                          ? 'text-[var(--color-warning)]'
+                          : undefined
                     }
                   >
                     {licenceExpiry.label}
@@ -802,47 +753,69 @@ export default async function ModelPage({ params }: { params: Promise<{ publicId
                       : licenceExpiry.expiringSoon
                         ? ' — Expiring soon'
                         : ''}
-                  </p>
-                </div>
+                  </span>
+                </Meta>
               )}
 
               {model.license_notes && (
-                <div>
-                  <p className="text-xs font-medium uppercase tracking-wide text-[var(--color-ink-faint)]">
-                    Notes
-                  </p>
-                  <p className="mt-0.5 whitespace-pre-wrap break-words text-[var(--color-ink-muted)]">
+                <Meta label="Notes">
+                  <span className="whitespace-pre-wrap break-words text-[var(--color-ink-muted)]">
                     {model.license_notes}
-                  </p>
-                </div>
+                  </span>
+                </Meta>
               )}
             </CardContent>
           </Card>
 
           {additionalLinks.length > 0 && (
             <Card>
-              <CardContent className="space-y-3 p-4 text-sm">
-                <p className="text-xs font-semibold uppercase tracking-wide text-[var(--color-ink-faint)]">
-                  Additional Links
-                </p>
-                <div className="space-y-2">
-                  {additionalLinks.map((link) => (
-                    <a
-                      key={link.url}
-                      href={link.url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="block break-words text-[var(--color-accent)] hover:underline"
-                    >
-                      {link.title ?? link.host ?? link.url}
-                    </a>
-                  ))}
-                </div>
+              <CardHeader className="p-4 pb-2">
+                <CardTitle>Links</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2 p-4 pt-0 text-sm">
+                {additionalLinks.map((link) => (
+                  <ExternalLink key={link.url} link={link} />
+                ))}
               </CardContent>
             </Card>
           )}
         </aside>
       </div>
     </>
+  )
+}
+
+/** One labelled fact in the sidebar: a small caps label over its value. */
+function Meta({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div>
+      <p className="text-xs font-medium uppercase tracking-wide text-[var(--color-ink-faint)]">
+        {label}
+      </p>
+      <div className="mt-0.5">{children}</div>
+    </div>
+  )
+}
+
+/** A section title with its item count beside it, quieter than the title. */
+function SectionCount({ label, count }: { label: string; count: number }) {
+  return (
+    <>
+      {label}
+      <span className="font-normal text-[var(--color-ink-faint)]">{count}</span>
+    </>
+  )
+}
+
+function ExternalLink({ link }: { link: ModelLink }) {
+  return (
+    <a
+      href={link.url}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="block break-words text-[var(--color-accent)] hover:underline"
+    >
+      {link.title ?? link.host ?? new URL(link.url).hostname}
+    </a>
   )
 }

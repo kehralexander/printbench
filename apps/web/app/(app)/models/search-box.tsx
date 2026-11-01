@@ -3,10 +3,13 @@
 import { useEffect, useRef, useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { Loader2, Search, X } from 'lucide-react'
-import { cn } from '@/lib/cn'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { SortControl } from '@/components/ui/sort-control'
+import type { SortOption } from '@/lib/sort'
 import { buildHref, type RawParams } from './params'
 
-const SORTS: { value: string; label: string }[] = [
+const SORTS: SortOption[] = [
   { value: 'relevance', label: 'Best match' },
   { value: 'name', label: 'Name' },
   { value: 'recent', label: 'Newest' },
@@ -67,50 +70,43 @@ export function SearchBox({ initialQuery, params }: { initialQuery: string; para
 
   return (
     <div className="flex flex-wrap items-center gap-3">
-      <div className="relative min-w-0 flex-1">
+      {/* A phone gives the search the whole row; the sort wraps below it,
+          right-aligned, as it does above every other list. */}
+      <div className="relative min-w-0 flex-1 basis-full sm:basis-0">
         <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-[var(--color-ink-faint)]" />
-        <input
+        <Input
           ref={inputRef}
           type="search"
           value={value}
           onChange={(event) => setValue(event.target.value)}
           placeholder="Search models, creators, tags and filenames…"
           aria-label="Search"
-          className={cn(
-            'h-11 w-full rounded-[var(--radius-control)] border border-[var(--color-border)] bg-[var(--color-surface)] pl-9 pr-9 text-sm',
-            'placeholder:text-[var(--color-ink-faint)] focus:border-[var(--color-accent)]',
-          )}
+          className="h-11 pl-9 pr-9"
         />
         {pending ? (
           <Loader2 className="absolute right-3 top-1/2 size-4 -translate-y-1/2 animate-spin text-[var(--color-ink-faint)]" />
         ) : (
           value.length > 0 && (
-            <button
+            <Button
               type="button"
+              variant="ghost"
+              size="icon"
               onClick={() => setValue('')}
               aria-label="Clear search"
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--color-ink-faint)] hover:text-[var(--color-ink)]"
+              className="absolute right-1 top-1/2 -translate-y-1/2"
             >
-              <X className="size-4" />
-            </button>
+              <X />
+            </Button>
           )
         )}
       </div>
 
-      <label className="flex items-center gap-2 text-sm text-[var(--color-ink-muted)]">
-        Sort
-        <select
-          value={sort}
-          onChange={(event) => router.push(buildHref(params, { sort: event.target.value }))}
-          className="h-9 rounded-[var(--radius-control)] border border-[var(--color-border)] bg-[var(--color-surface)] px-2 text-sm text-[var(--color-ink)]"
-        >
-          {SORTS.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </select>
-      </label>
+      <SortControl
+        className="ml-auto"
+        options={SORTS}
+        value={sort}
+        onChange={(next) => router.push(buildHref(params, { sort: next }))}
+      />
     </div>
   )
 }

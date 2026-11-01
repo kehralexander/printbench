@@ -861,6 +861,11 @@ export async function listRequests(
     modelId?: string
     limit?: number
     offset?: number
+    /**
+     * A view order instead of the queue's own: for looking, never for
+     * deciding what prints next. Absent or 'manual' keeps the queue order.
+     */
+    sort?: RequestSort
   } = {},
 ): Promise<PrintRequest[]> {
   const limit = Math.min(Math.max(options.limit ?? 100, 1), 200)
@@ -889,9 +894,12 @@ export async function listRequests(
     options.status.length > 0 &&
     options.status.every((status) => CLOSED.includes(status))
 
-  const order = closedOnly
-    ? sql`ORDER BY r.closed_at DESC NULLS LAST, r.created_at DESC`
-    : sql`ORDER BY (r.status IN ('done', 'cancelled')) ASC, ${QUEUE_ORDER}`
+  const order =
+    options.sort && options.sort !== 'manual'
+      ? sql`ORDER BY ${VIEW_ORDER[options.sort]}`
+      : closedOnly
+        ? sql`ORDER BY r.closed_at DESC NULLS LAST, r.created_at DESC`
+        : sql`ORDER BY (r.status IN ('done', 'cancelled')) ASC, ${QUEUE_ORDER}`
 
   const rows = await db.execute<Row>(sql`
     ${SELECT_REQUEST}
@@ -908,6 +916,16 @@ export async function listRequests(
  * printer tracker uses the same order to pick between requests for one file.
  */
 export const QUEUE_ORDER = sql`r.position ASC NULLS LAST, r.priority DESC, r.due_at ASC NULLS LAST, r.created_at ASC`
+
+/** Ways to look at the request list other than the queue's own order. */
+export type RequestSort = 'manual' | 'urgency' | 'due' | 'oldest' | 'requester'
+
+const VIEW_ORDER: Record<Exclude<RequestSort, 'manual'>, ReturnType<typeof sql>> = {
+  urgency: sql`r.priority DESC, r.due_at ASC NULLS LAST, r.created_at ASC`,
+  due: sql`r.due_at ASC NULLS LAST, r.priority DESC, r.created_at ASC`,
+  oldest: sql`r.created_at ASC`,
+  requester: sql`lower(r.requested_by) ASC NULLS LAST, r.created_at ASC`,
+}
 
 /**
  * Puts the open queue in the order given, as dragged. Only open requests take

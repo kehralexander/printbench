@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { formatEstimate } from '@pb/core/requests'
 import { ClockTime } from '@/components/ui/clock-time'
+import { Progress } from '@/components/ui/progress'
 import { cn } from '@/lib/cn'
 import { projectReading, type Reading } from './project-reading'
 
@@ -48,7 +49,9 @@ export function LiveProgressBar({
   compact?: boolean
 }) {
   const projected = useProjection({ progress, remainingSec, elapsedSec: null }, ageSec, ticking)
-  return <ProgressBar progress={projected.progress!} label={label} compact={compact} />
+  return (
+    <ProgressBar progress={projected.progress!} label={label} compact={compact} paused={!ticking} />
+  )
 }
 
 /** The printer status card's bar plus elapsed, remaining and finish time. */
@@ -76,7 +79,9 @@ export function PrintProgress({
   const projected = useProjection({ progress, elapsedSec, remainingSec }, ageSec, ticking)
   return (
     <div className="space-y-2">
-      {projected.progress != null && <ProgressBar progress={projected.progress} label={label} />}
+      {projected.progress != null && (
+        <ProgressBar progress={projected.progress} label={label} paused={!ticking} />
+      )}
       <dl className="grid grid-cols-3 gap-2 text-sm">
         <Fact label="Elapsed">
           {projected.elapsedSec != null ? formatEstimate(projected.elapsedSec / 60) : '—'}
@@ -99,31 +104,26 @@ function ProgressBar({
   progress,
   label,
   compact = false,
+  paused = false,
 }: {
   progress: number
   label: string
   compact?: boolean
+  /** Drawn in the warning colour, matching the printer's "Paused" badge. */
+  paused?: boolean
 }) {
   const percent = compact ? Math.round(progress * 100) : Math.round(progress * 1000) / 10
   return (
     <div className={cn('flex items-center', compact ? 'gap-2' : 'gap-3')}>
-      <div
-        role="progressbar"
-        aria-label={label}
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-valuenow={Math.round(percent)}
-        className={cn(
-          'flex-1 overflow-hidden rounded-full bg-[var(--color-surface-2)]',
-          compact ? 'h-1.5' : 'h-2',
-        )}
-      >
-        {/* Linear over the one-second tick, so the bar creeps rather than steps. */}
-        <div
-          className="h-full rounded-full bg-[var(--color-accent)] transition-[width] duration-1000 ease-linear motion-reduce:transition-none"
-          style={{ width: `${percent}%` }}
-        />
-      </div>
+      {/* Animated over the one-second tick, so the bar creeps rather than steps. */}
+      <Progress
+        value={progress}
+        label={label}
+        size={compact ? 'sm' : 'md'}
+        tone={paused ? 'warning' : 'accent'}
+        animated
+        className="flex-1"
+      />
       <span
         className={cn(
           'text-right tabular-nums',
