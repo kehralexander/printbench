@@ -17,12 +17,21 @@ import { plateFilamentG } from './request-service'
  *                                its request counts a print or goes back to waiting
  *   offline                    → nothing; an unreachable printer has not stopped
  *
+ * A printer that only goes quiet — idle, without saying complete, cancelled
+ * or failed — ends its job once it has stayed quiet for `QUIET_END_MS`. The
+ * Kobra X behind KX-Bridge reads idle for moments while it heats and levels
+ * before a print; ending the job on the first such reading logged each one as
+ * a cancel at 0%.
+ *
  * Every step re-reads the database and is safe to repeat, so a missed or
  * doubled tick costs nothing but a delay.
  */
 
 /** A job that ended this close to 100% finished, whatever the printer said after. */
 const DONE_PROGRESS = 0.98
+
+/** How long a printer must stay quiet before its job counts as cancelled. */
+export const QUIET_END_MS = 3 * 60_000
 
 export type JobOutcome = 'success' | 'cancelled' | 'failed'
 
@@ -35,6 +44,7 @@ type OpenJob = {
   progress: string | null
   print_sec: number | null
   started_at: Date
+  idle_since: Date | null
 }
 
 export interface LibraryFile {
@@ -109,7 +119,8 @@ export async function trackPrinter(
 
   const open = (
     await db.execute<OpenJob>(sql`
-      SELECT id, filename, model_id, model_file_id, request_id, progress, print_sec, started_at
+      SELECT id, filename, model_id, model_file_id, request_id, progress, print_sec, started_at,
+             idle_since
       FROM printer_jobs
       WHERE host_id = ${host.id} AND finished_at IS NULL
       ORDER BY started_at DESC`)
@@ -119,11 +130,22 @@ export async function trackPrinter(
   const [current, ...stale] = open
   for (const job of stale) await finishJob(db, host, job, 'cancelled', now, null)
 
+  // Busy without a file name — between phases of getting ready — is still the
+  // job that is open, if any; there is nothing to start one from otherwise.
+  if (status.busy && !status.filename) {
+    if (current?.idle_since) {
+      await db.execute(sql`UPDATE printer_jobs SET idle_since = NULL WHERE id = ${current.id}`)
+    }
+    return
+  }
+
   if (status.busy && status.filename) {
     if (current && current.filename === status.filename) {
       await db.execute(sql`
         UPDATE printer_jobs
-        SET progress = ${status.progress ?? null}, print_sec = ${roundOrNull(status.elapsedSec)}
+        SET progress = ${status.progress ?? current.progress},
+            print_sec = ${roundOrNull(status.elapsedSec) ?? current.print_sec},
+            idle_since = NULL
         WHERE id = ${current.id}`)
       // A file added to the library mid-print still gets its job.
       if (!current.model_id) {
@@ -144,7 +166,30 @@ export async function trackPrinter(
     return
   }
 
-  if (current) await finishJob(db, host, current, outcomeOf(current, status), now, status)
+  if (!current) return
+  const outcome = outcomeOf(current, status)
+  if (quietOnly(status, outcome)) {
+    const since = current.idle_since ? new Date(current.idle_since) : now
+    if (now.getTime() - since.getTime() < QUIET_END_MS) {
+      if (!current.idle_since) {
+        await db.execute(sql`UPDATE printer_jobs SET idle_since = ${now} WHERE id = ${current.id}`)
+      }
+      return
+    }
+    // It stopped when it went quiet, not when the wait ran out.
+    await finishJob(db, host, current, outcome, since, status)
+    return
+  }
+  await finishJob(db, host, current, outcome, now, status)
+}
+
+/**
+ * An end the printer did not announce: plain idle, short of done. It may be a
+ * cancel (KX-Bridge reports one this way) or a moment of quiet mid-preparation,
+ * and only waiting tells them apart.
+ */
+function quietOnly(status: PrinterStatus, outcome: JobOutcome): boolean {
+  return status.state === 'idle' && outcome === 'cancelled'
 }
 
 /**

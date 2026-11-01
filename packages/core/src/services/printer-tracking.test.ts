@@ -225,14 +225,53 @@ describe('printer tracking', { tags: ['integration'] }, () => {
   it('treats a printer going idle part-way as a cancel: logged as failed, request back in line', async () => {
     const { id } = await request()
     await trackPrinter(db, printer, printing('benchy_plate.gcode', 0.4, 30), at(30))
-    // KX-Bridge reports a cancel as plain standby.
+    // KX-Bridge reports a cancel as plain standby — the job stays open a while
+    // in case that is only a pause in getting ready.
     await trackPrinter(db, printer, idle, at(31))
+    expect(await jobs()).toMatchObject([{ status: 'printing', finished_at: null }])
+    expect(await runs()).toHaveLength(0)
+    await trackPrinter(db, printer, idle, at(35))
 
     expect(await runs()).toMatchObject([
-      { status: 'failed', notes: 'Cancelled on Kobra X at 40%, for Sam.', filament_used_g: null },
+      {
+        status: 'failed',
+        notes: 'Cancelled on Kobra X at 40%, for Sam.',
+        filament_used_g: null,
+        duration_min: 30,
+      },
     ])
+    // Ended when it went quiet, not when the wait ran out.
+    expect(new Date((await jobs())[0]!.finished_at!).toISOString()).toBe(at(31).toISOString())
     expect(await getRequest(db, id)).toMatchObject({ status: 'requested', printsDone: 0 })
     expect(await jobs()).toMatchObject([{ status: 'cancelled' }])
+  })
+
+  it('rides out the moments a printer reads idle while it heats and levels', async () => {
+    const { id } = await request()
+    // The Kobra X before a print: busy, a moment of standby, busy without a
+    // file name, busy again — one print, not a string of cancels at 0%.
+    await trackPrinter(db, printer, printing('benchy_plate.gcode', 0, 0), at(0))
+    await trackPrinter(db, printer, idle, at(1))
+    await trackPrinter(db, printer, { state: 'printing', busy: true }, at(2))
+    await trackPrinter(db, printer, idle, at(3))
+    await trackPrinter(db, printer, printing('benchy_plate.gcode', 0, 0), at(4))
+    // A quiet spell that started earlier does not count against a later one.
+    await trackPrinter(db, printer, idle, at(6))
+    await trackPrinter(db, printer, printing('benchy_plate.gcode', 0.5, 30), at(36))
+    await trackPrinter(db, printer, complete('benchy_plate.gcode', 60), at(66))
+
+    expect(await jobs()).toMatchObject([{ status: 'success', request_id: id }])
+    expect(await runs()).toMatchObject([{ status: 'success', duration_min: 60 }])
+    expect(await getRequest(db, id)).toMatchObject({ status: 'done', printsDone: 1 })
+  })
+
+  it('ends a quiet job at once when the printer says how it ended', async () => {
+    await request()
+    await trackPrinter(db, printer, printing('benchy_plate.gcode', 0.4, 30), at(30))
+    await trackPrinter(db, printer, idle, at(31))
+    await trackPrinter(db, printer, { state: 'cancelled', busy: false }, at(32))
+    expect(await jobs()).toMatchObject([{ status: 'cancelled' }])
+    expect(await runs()).toHaveLength(1)
   })
 
   it('leaves a job open while the printer is unreachable', async () => {
@@ -294,6 +333,7 @@ describe('printer tracking', { tags: ['integration'] }, () => {
     await trackPrinter(db, printer, complete('cube.gcode', 10), at(11))
     await trackPrinter(db, printer, printing('cube.gcode', 0.3, 3), at(20))
     await trackPrinter(db, printer, idle, at(21))
+    await trackPrinter(db, printer, idle, at(25))
     const unmatched = await unmatchedJobs(db)
     expect(unmatched.map((job) => job.status)).toEqual(['cancelled', 'success'])
     expect(await runs()).toHaveLength(0)
@@ -317,6 +357,7 @@ describe('printer tracking', { tags: ['integration'] }, () => {
     await trackPrinter(db, printer, complete('later.gcode', 9), at(10))
     await trackPrinter(db, printer, printing('junk.gcode', 0.1, 1), at(20))
     await trackPrinter(db, printer, idle, at(21))
+    await trackPrinter(db, printer, idle, at(25))
     const junk = (await unmatchedJobs(db)).find((job) => job.filename === 'junk.gcode')!
     await dismissJob(db, junk.id)
     expect((await unmatchedJobs(db)).map((job) => job.filename)).toEqual(['later.gcode'])
@@ -409,6 +450,7 @@ describe('printer tracking', { tags: ['integration'] }, () => {
     await trackPrinter(db, printer, complete('benchy_plate.gcode', 80), at(81))
     await trackPrinter(db, printer, printing('benchy_plate.gcode', 0.08, 5), at(100))
     await trackPrinter(db, printer, idle, at(101))
+    await trackPrinter(db, printer, idle, at(105))
     const stats = await printOutcomeStats(db)
     const benchy = stats.byModel.find((row) => row.label === 'Benchy')
     expect(benchy).toMatchObject({ total: 2, successes: 1, failures: 1, successRate: 0.5 })

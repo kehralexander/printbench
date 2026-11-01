@@ -131,6 +131,11 @@ export const printerJobs = pgTable(
     finishedAt: timestamp('finished_at', { withTimezone: true }),
     /** Set when an unmatched job was waved off rather than linked to a model. */
     dismissedAt: timestamp('dismissed_at', { withTimezone: true }),
+    /**
+     * When the printer first went quiet without saying how the job ended. The
+     * job stays open until the quiet has lasted long enough to be a cancel.
+     */
+    idleSince: timestamp('idle_since', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index('printer_jobs_host_idx').on(t.hostId, t.startedAt)],

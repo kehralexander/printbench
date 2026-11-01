@@ -162,6 +162,13 @@
       "when": 1791380559157,
       "tag": "0022_kx_bridge",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1793535483907,
+      "tag": "0023_printer_job_idle",
+      "breakpoints": true
     }
   ]
 }

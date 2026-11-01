@@ -1,0 +1,1 @@
+ALTER TABLE "printer_jobs" ADD COLUMN "idle_since" timestamp with time zone;
