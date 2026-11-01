@@ -1,7 +1,14 @@
 import Link from 'next/link'
-import { notFound } from 'next/navigation'
+import { notFound, redirect } from 'next/navigation'
 import { getSessionUser } from '@pb/auth'
-import { can, listFilaments, listSpools, spoolHistory, spoolPrints } from '@pb/core'
+import {
+  can,
+  listFilaments,
+  listSpools,
+  spoolHistory,
+  spoolPrints,
+  spoolmanEnabled,
+} from '@pb/core'
 import { getDb } from '@pb/db'
 import { NotPermitted } from '@/components/shell/not-permitted'
 import { PageHeader } from '@/components/shell/page-header'
@@ -11,6 +18,8 @@ export const metadata = { title: 'Spool' }
 export default async function SpoolPage({ params }: { params: Promise<{ id: string }> }) {
   const user = await getSessionUser()
   if (!can(user, 'filament:view')) return <NotPermitted what="the filament library" />
+  // The built-in inventory is switched off while Spoolman owns it.
+  if (spoolmanEnabled()) redirect('/filaments')
   const { id } = await params
   const spools = await listSpools(getDb())
   const spool = spools.find((s) => s.id === id)

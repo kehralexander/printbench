@@ -66,6 +66,15 @@ export const printRequests = pgTable(
     startedAt: timestamp('started_at', { withTimezone: true }),
 
     /**
+     * The Spoolman spool chosen for it, when Spoolman is the inventory. A soft
+     * reference into another system: no foreign key, and a spool that has
+     * since vanished simply shows nothing.
+     */
+    spoolmanSpoolId: integer('spoolman_spool_id'),
+    /** Filament for one print in grams, read from the chosen G-code file. */
+    filamentG: integer('filament_g'),
+
+    /**
      * The print history entry created when this was marked printed.
      *
      * Kept so the entry can be withdrawn again if the request is reopened.

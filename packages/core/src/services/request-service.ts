@@ -57,6 +57,8 @@ export interface RequestInput {
    * linked model; `null` is an explicit "no estimate".
    */
   estimatedMin?: number | null
+  /** The Spoolman spool asked for, when Spoolman is the inventory. */
+  spoolmanSpoolId?: number | null
   dueAt?: Date | null
 }
 
@@ -95,6 +97,9 @@ export interface PrintRequest {
   estimatedMin: number | null
   /** Set while it is on the printer. */
   startedAt: Date | null
+  spoolmanSpoolId: number | null
+  /** Grams for one print, from the chosen G-code. */
+  filamentG: number | null
 
   dueAt: Date | null
   closedAt: Date | null
@@ -173,6 +178,14 @@ function cleanEstimate(value: number | null | undefined): number | null {
   return Math.round(value)
 }
 
+function cleanSpoolId(value: number | null | undefined): number | null {
+  if (value == null) return null
+  if (!Number.isInteger(value) || value < 1) {
+    throw new RequestValidationError('That is not a Spoolman spool.')
+  }
+  return value
+}
+
 function trimTo(value: string | null | undefined, max: number): string | null {
   const trimmed = value?.trim()
   return trimmed ? trimmed.slice(0, max) : null
@@ -238,6 +251,28 @@ export async function suggestEstimate(
   modelId: string,
   modelFileId: string | null = null,
 ): Promise<EstimateSuggestion | null> {
+  const plate = await readPlate(db, modelId, modelFileId)
+  if (plate.durationMin != null) return { minutes: plate.durationMin, source: 'gcode' }
+  return historyEstimate(db, modelId, modelFileId)
+}
+
+/** What the slicer wrote into the G-code a request points at. */
+interface PlateFacts {
+  durationMin: number | null
+  /** Filament for one print, in grams. */
+  filamentG: number | null
+}
+
+/**
+ * Reads the request's G-code: the chosen file, or the model's only G-code
+ * when none was chosen. Several with none chosen are different plates, and
+ * picking one would be a guess.
+ */
+async function readPlate(
+  db: Database,
+  modelId: string,
+  modelFileId: string | null,
+): Promise<PlateFacts> {
   const files = await db
     .select({
       id: schema.modelFiles.id,
@@ -259,25 +294,31 @@ export async function suggestEstimate(
     : gcodes.length === 1
       ? gcodes[0]
       : undefined
+  if (!gcode) return { durationMin: null, filamentG: null }
 
-  if (gcode) {
-    const relativePath = gcode.model.isFileModel
-      ? gcode.model.path
-      : `${gcode.model.path}/${gcode.filename}`
-    const metadata = await readGcodeMetadata(
-      createStorageAdapter(libraryLocationFromRow(gcode.library)),
-      relativePath,
-      gcode.size,
-    )
-    if (
-      metadata.durationMin &&
-      metadata.durationMin >= 1 &&
-      metadata.durationMin <= MAX_ESTIMATE_MIN
-    ) {
-      return { minutes: Math.round(metadata.durationMin), source: 'gcode' }
-    }
+  const relativePath = gcode.model.isFileModel
+    ? gcode.model.path
+    : `${gcode.model.path}/${gcode.filename}`
+  const metadata = await readGcodeMetadata(
+    createStorageAdapter(libraryLocationFromRow(gcode.library)),
+    relativePath,
+    gcode.size,
+  )
+  const minutes = metadata.durationMin
+  const grams = metadata.filamentUsedG
+  return {
+    durationMin:
+      minutes != null && minutes >= 1 && minutes <= MAX_ESTIMATE_MIN ? Math.round(minutes) : null,
+    filamentG: grams != null && grams > 0 && grams < 100_000 ? Math.ceil(grams) : null,
   }
+}
 
+/** The median duration of earlier successful prints: the same file first, then the model. */
+async function historyEstimate(
+  db: Database,
+  modelId: string,
+  modelFileId: string | null,
+): Promise<EstimateSuggestion | null> {
   const history = await db.execute<{ same_file: number | null; model: number | null }>(sql`
     SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY duration_min)
              FILTER (WHERE ${modelFileId}::uuid IS NOT NULL AND model_file_id = ${modelFileId}::uuid)
@@ -289,22 +330,27 @@ export async function suggestEstimate(
   if (median != null && Number(median) >= 1) {
     return { minutes: Math.min(Math.round(Number(median)), MAX_ESTIMATE_MIN), source: 'history' }
   }
-
   return null
 }
 
-/** The suggestion, swallowing failures: an estimate is never worth failing a write over. */
-async function quietSuggestion(
+/**
+ * The plate facts and a suggested estimate in one pass, swallowing failures:
+ * neither is ever worth failing a write over.
+ */
+async function quietFacts(
   db: Database,
   modelId: string | null,
   modelFileId: string | null,
-): Promise<number | null> {
-  if (!modelId) return null
+): Promise<{ estimatedMin: number | null; filamentG: number | null }> {
+  if (!modelId) return { estimatedMin: null, filamentG: null }
   try {
-    return (await suggestEstimate(db, modelId, modelFileId))?.minutes ?? null
+    const plate = await readPlate(db, modelId, modelFileId)
+    const estimatedMin =
+      plate.durationMin ?? (await historyEstimate(db, modelId, modelFileId))?.minutes ?? null
+    return { estimatedMin, filamentG: plate.filamentG }
   } catch (error) {
-    console.warn(`[queue] no estimate for model ${modelId}: ${String(error)}`)
-    return null
+    console.warn(`[queue] could not read details for model ${modelId}: ${String(error)}`)
+    return { estimatedMin: null, filamentG: null }
   }
 }
 
@@ -336,21 +382,22 @@ export async function createRequest(
     throw new RequestValidationError('That file does not belong to the linked model.')
   }
 
+  const facts = await quietFacts(db, modelId, modelFileId)
   const estimatedMin =
-    input.estimatedMin === undefined
-      ? await quietSuggestion(db, modelId, modelFileId)
-      : cleanEstimate(input.estimatedMin)
+    input.estimatedMin === undefined ? facts.estimatedMin : cleanEstimate(input.estimatedMin)
 
   const rows = await db.execute<{ id: string }>(sql`
     INSERT INTO print_requests
       (title, notes, requested_by, requested_by_user_id, model_id, model_file_id,
-       quantity, priority, material, color_hex, color_name, estimated_min, due_at, created_by)
+       quantity, priority, material, color_hex, color_name, estimated_min, spoolman_spool_id,
+       filament_g, due_at, created_by)
     VALUES (${title}, ${trimTo(input.notes, MAX_NOTES)}, ${trimTo(input.requestedBy, MAX_NAME)},
             ${input.requestedByUserId ?? null}, ${modelId}, ${modelFileId},
             ${cleanQuantity(input.quantity)},
             ${cleanPriority(input.priority)}::print_request_priority,
             ${trimTo(input.material, MAX_NAME)}, ${cleanColor(input.colorHex)},
             ${trimTo(input.colorName, MAX_NAME)}, ${estimatedMin},
+            ${cleanSpoolId(input.spoolmanSpoolId)}, ${facts.filamentG},
             ${input.dueAt ?? null}, ${createdBy})
     RETURNING id`)
 
@@ -411,6 +458,7 @@ export type RequestPatch = Partial<
     | 'colorHex'
     | 'colorName'
     | 'estimatedMin'
+    | 'spoolmanSpoolId'
     | 'dueAt'
   >
 >
@@ -435,6 +483,9 @@ export async function updateRequest(
   if (patch.colorHex !== undefined) sets.push(sql`color_hex = ${cleanColor(patch.colorHex)}`)
   if (patch.colorName !== undefined) {
     sets.push(sql`color_name = ${trimTo(patch.colorName, MAX_NAME)}`)
+  }
+  if (patch.spoolmanSpoolId !== undefined) {
+    sets.push(sql`spoolman_spool_id = ${cleanSpoolId(patch.spoolmanSpoolId)}`)
   }
   if (patch.estimatedMin !== undefined) {
     sets.push(sql`estimated_min = ${cleanEstimate(patch.estimatedMin)}`)
@@ -620,8 +671,9 @@ export async function linkRequest(
     throw new RequestValidationError('That file does not belong to that model.')
   }
 
-  // Fills an empty estimate only; one that was typed in stays as it is.
-  const suggested = await quietSuggestion(db, modelId, modelId ? modelFileId : null)
+  // Fills an empty estimate only; one that was typed in stays as it is. The
+  // grams are derived from the file, so they follow it.
+  const facts = await quietFacts(db, modelId, modelId ? modelFileId : null)
 
   await db.execute(sql`
     UPDATE print_requests
@@ -629,7 +681,8 @@ export async function linkRequest(
         -- Clearing the model clears the file with it, or the row keeps a file
         -- id that the check constraint would reject on the next write.
         model_file_id = ${modelId ? modelFileId : null},
-        estimated_min = coalesce(estimated_min, ${suggested}::int),
+        estimated_min = coalesce(estimated_min, ${facts.estimatedMin}::int),
+        filament_g = ${facts.filamentG}::int,
         updated_at = now()
     WHERE id = ${requestId}`)
 }
@@ -663,6 +716,8 @@ type Row = {
   color_name: string | null
   estimated_min: number | null
   started_at: string | null
+  spoolman_spool_id: number | null
+  filament_g: number | null
   due_at: string | null
   closed_at: string | null
   print_run_id: string | null
@@ -680,7 +735,7 @@ const SELECT_REQUEST = sql`
            ORDER BY (f.category = 'slicer'), f.size DESC LIMIT 1) AS thumb_file_id,
          r.model_file_id, mf.filename,
          r.quantity, r.priority, r.status, r.material, r.color_hex, r.color_name,
-         r.estimated_min, r.started_at, r.due_at, r.closed_at, r.print_run_id,
+         r.estimated_min, r.started_at, r.spoolman_spool_id, r.filament_g, r.due_at, r.closed_at, r.print_run_id,
          r.created_by, u.name AS created_by_name, r.created_at
   FROM print_requests r
   LEFT JOIN models m ON m.id = r.model_id
@@ -709,6 +764,8 @@ function toRequest(row: Row): PrintRequest {
     colorName: row.color_name,
     estimatedMin: row.estimated_min,
     startedAt: row.started_at ? new Date(row.started_at) : null,
+    spoolmanSpoolId: row.spoolman_spool_id,
+    filamentG: row.filament_g,
     dueAt: row.due_at ? new Date(row.due_at) : null,
     closedAt: row.closed_at ? new Date(row.closed_at) : null,
     printRunId: row.print_run_id,

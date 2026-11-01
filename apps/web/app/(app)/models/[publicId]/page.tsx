@@ -21,6 +21,7 @@ import {
   printStats,
   printSuggestions,
   slicersFor,
+  spoolmanEnabled,
 } from '@pb/core'
 import { PageHeader } from '@/components/shell/page-header'
 import { Card, CardContent } from '@/components/ui/card'
@@ -236,7 +237,7 @@ export default async function ModelPage({ params }: { params: Promise<{ publicId
       collectionsForModel(db, model.id),
       user ? isLiked(db, user.id, model.id) : Promise.resolve(false),
       canQueue ? openRequestsForModel(db, model.id) : Promise.resolve([]),
-      canLogPrints ? listSpools(db) : Promise.resolve([]),
+      canLogPrints && !spoolmanEnabled() ? listSpools(db) : Promise.resolve([]),
       canQueue ? filamentOptions(db) : Promise.resolve([]),
     ])
 
@@ -574,6 +575,7 @@ export default async function ModelPage({ params }: { params: Promise<{ publicId
                 .map((file) => ({ id: file.id, filename: file.filename }))}
               suggestions={suggestions}
               spools={spools}
+              spoolInventory={!spoolmanEnabled()}
               stats={{
                 ...stats,
                 lastPrintedAt: stats.lastPrintedAt?.toISOString() ?? null,

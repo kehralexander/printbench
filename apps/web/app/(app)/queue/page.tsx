@@ -5,6 +5,9 @@ import {
   can,
   formatEstimate,
   listRequests,
+  listSpoolmanSpools,
+  spoolmanEnabled,
+  spoolmanSpoolLink,
   queueStats,
   requesterSuggestions,
   type PrintRequestStatus,
@@ -17,7 +20,7 @@ import { NotPermitted } from '@/components/shell/not-permitted'
 import { Card } from '@/components/ui/card'
 import { EmptyState } from '@/components/ui/empty-state'
 import { AddRequests } from './add-requests'
-import { RequestRow, type QueueRow } from './request-row'
+import { RequestRow, type QueueRow, type SpoolBadge } from './request-row'
 
 export const dynamic = 'force-dynamic'
 export const metadata = { title: 'Print queue' }
@@ -53,6 +56,22 @@ export default async function QueuePage({
     filamentOptions(db),
   ])
 
+  // Live spool state for the badges. Cached briefly; when Spoolman is down the
+  // rows simply show no spool, rather than the page failing.
+  const spoolman = spoolmanEnabled() ? await listSpoolmanSpools() : null
+  const spools = new Map<number, SpoolBadge>(
+    spoolman?.ok
+      ? spoolman.spools.map((spool) => [
+          spool.id,
+          {
+            remainingG: spool.remainingG,
+            archived: spool.archived,
+            url: spoolmanSpoolLink(spool.id),
+          },
+        ])
+      : [],
+  )
+
   // Working the queue is a member's job; asking is open to anyone signed in.
   const canRun = can(policyUser, 'request:manage')
   const empty = stats.waiting + stats.printing + stats.done + stats.cancelled === 0
@@ -70,6 +89,9 @@ export default async function QueuePage({
     colorName: request.colorName,
     estimatedMin: request.estimatedMin,
     startedAt: request.startedAt?.toISOString() ?? null,
+    spoolmanSpoolId: request.spoolmanSpoolId,
+    spool: request.spoolmanSpoolId != null ? (spools.get(request.spoolmanSpoolId) ?? null) : null,
+    filamentG: request.filamentG,
     dueAt: request.dueAt?.toISOString() ?? null,
     createdAt: request.createdAt.toISOString(),
     printRunId: request.printRunId,

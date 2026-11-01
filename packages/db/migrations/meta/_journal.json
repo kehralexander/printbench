@@ -134,6 +134,13 @@
       "when": 1791380559153,
       "tag": "0018_queue_details",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1791380559154,
+      "tag": "0019_spoolman",
+      "breakpoints": true
     }
   ]
 }

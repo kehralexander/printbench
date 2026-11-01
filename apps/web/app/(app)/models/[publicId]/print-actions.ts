@@ -17,6 +17,7 @@ import {
   signToken,
   slicerUrl,
   slicersFor,
+  spoolmanEnabled,
   updatePrint,
   type BedAdhesion,
   type GcodeMetadata,
@@ -67,7 +68,12 @@ export interface PrintFormInput {
 function toEntry(input: PrintFormInput): Omit<PrintEntry, 'modelId'> {
   return {
     recordingKey: input.recordingKey,
-    filamentUsage: input.filamentUsage,
+    /*
+     * Spoolman owns stock when configured, and something else reports usage to
+     * it. Leaving usage undefined records none on a new print and keeps an old
+     * print's as it was, so PrintBench never deducts on its own.
+     */
+    filamentUsage: spoolmanEnabled() ? undefined : input.filamentUsage,
     filamentCostManual: input.filamentCostManual,
     modelFileId: input.modelFileId || null,
     printerName: input.printerName ?? null,

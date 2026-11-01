@@ -26,6 +26,13 @@ import { LinkPicker } from './link-picker'
 import { RequestEditor } from './request-editor'
 import { removeRequest, setRequestModel, setStatus } from './actions'
 
+export interface SpoolBadge {
+  remainingG: number | null
+  archived: boolean
+  /** Spoolman's page for the spool. */
+  url: string | null
+}
+
 export interface QueueRow {
   id: string
   title: string
@@ -41,6 +48,11 @@ export interface QueueRow {
   estimatedMin: number | null
   /** ISO; set while it is on the printer. */
   startedAt: string | null
+  spoolmanSpoolId: number | null
+  /** Live state of that spool; null when Spoolman is off, down, or lost it. */
+  spool: SpoolBadge | null
+  /** Grams for one print, from the chosen G-code. */
+  filamentG: number | null
   /** ISO strings: Dates do not need to survive the round trip, only render. */
   dueAt: string | null
   createdAt: string
@@ -115,11 +127,20 @@ export function RequestRow({
         : `~${formatEstimate(request.estimatedMin)}`
       : null
 
+  const neededG = request.filamentG != null ? request.filamentG * request.quantity : null
+  // Only a warning while it still matters, and only with both numbers known.
+  const short =
+    !closed &&
+    neededG != null &&
+    request.spool?.remainingG != null &&
+    neededG > request.spool.remainingG
+
   const details = [
     request.requestedBy && `for ${request.requestedBy}`,
     look,
     request.filename,
     !closed && estimate,
+    !closed && neededG != null && `~${neededG} g`,
     request.dueAt &&
       `${overdue ? 'was due' : 'due'} ${new Date(request.dueAt).toLocaleDateString('en-GB', {
         day: 'numeric',
@@ -184,6 +205,33 @@ export function RequestRow({
             </>
           )}
         </p>
+
+        {request.spoolmanSpoolId != null && !closed && (
+          <p className="mt-0.5 text-xs text-[var(--color-ink-muted)]">
+            {request.spool?.url ? (
+              <a
+                href={request.spool.url}
+                target="_blank"
+                rel="noreferrer"
+                className="text-[var(--color-accent)] hover:underline"
+              >
+                Spool #{request.spoolmanSpoolId}
+              </a>
+            ) : (
+              `Spool #${request.spoolmanSpoolId}`
+            )}
+            {request.spool?.remainingG != null &&
+              ` · ${Math.round(request.spool.remainingG)} g left`}
+            {request.spool?.archived && ' · archived'}
+            {short && (
+              <span className="text-[var(--color-danger)]">
+                {' '}
+                · not enough for {request.quantity > 1 ? `all ${request.quantity}` : 'this'} (needs
+                ~{neededG} g)
+              </span>
+            )}
+          </p>
+        )}
 
         {request.status === 'printing' && request.startedAt && (
           <p className="mt-0.5 text-xs text-[var(--color-ink-muted)]">

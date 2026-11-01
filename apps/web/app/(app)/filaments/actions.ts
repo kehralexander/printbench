@@ -9,6 +9,7 @@ import {
   editSpool,
   measureSpool,
   remainingFromMeasurement,
+  spoolmanEnabled,
   type FilamentInput,
   type SpoolInput,
 } from '@pb/core'
@@ -20,6 +21,9 @@ async function manage(action: (actorId: string) => Promise<string | void>): Prom
   try {
     const user = await requireUser()
     assertCan(user, 'filament:manage')
+    if (spoolmanEnabled()) {
+      return { ok: false, error: 'Filaments are managed in Spoolman.' }
+    }
     const id = await action(user.id)
     revalidatePath('/filaments', 'layout')
     revalidatePath('/models', 'layout')

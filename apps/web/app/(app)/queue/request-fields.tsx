@@ -17,19 +17,28 @@ export interface MaterialValue {
   colorName: string
   /** Lowercase "#rrggbb", or empty for "any colour". */
   colorHex: string
+  /** The Spoolman spool picked, when the choice was one. */
+  spoolmanSpoolId: number | null
 }
 
-export const NO_MATERIAL: MaterialValue = { material: '', colorName: '', colorHex: '' }
+export const NO_MATERIAL: MaterialValue = {
+  material: '',
+  colorName: '',
+  colorHex: '',
+  spoolmanSpoolId: null,
+}
 
 export function materialFrom(request: {
   material: string | null
   colorName: string | null
   colorHex: string | null
+  spoolmanSpoolId?: number | null
 }): MaterialValue {
   return {
     material: request.material ?? '',
     colorName: request.colorName ?? '',
     colorHex: request.colorHex ?? '',
+    spoolmanSpoolId: request.spoolmanSpoolId ?? null,
   }
 }
 
@@ -39,13 +48,18 @@ export function materialInput(value: MaterialValue) {
     material: value.material.trim() || null,
     colorName: value.colorName.trim() || null,
     colorHex: value.colorHex || null,
+    spoolmanSpoolId: value.spoolmanSpoolId,
   }
 }
 
 const CUSTOM = '__custom'
 
 function matchOption(value: MaterialValue, options: FilamentOption[]): string {
-  if (!value.material && !value.colorName && !value.colorHex) return ''
+  if (!value.material && !value.colorName && !value.colorHex && !value.spoolmanSpoolId) return ''
+  if (value.spoolmanSpoolId != null) {
+    const spool = options.find((option) => option.spoolmanSpoolId === value.spoolmanSpoolId)
+    if (spool) return spool.id
+  }
   const match = options.find(
     (option) =>
       option.material.toLowerCase() === value.material.trim().toLowerCase() &&
@@ -93,20 +107,23 @@ export function MaterialPicker({
               material: option.material,
               colorName: option.colorName ?? '',
               colorHex: option.colorHex ?? '',
+              spoolmanSpoolId: option.spoolmanSpoolId ?? null,
             })
           }
         }}
       >
         <option value="">Any — no preference</option>
-        {options.length > 0 && (
-          <optgroup label="On hand">
-            {options.map((option) => (
-              <option key={option.id} value={option.id}>
-                {option.label}
-              </option>
-            ))}
+        {[...new Set(options.map((option) => option.group))].map((group) => (
+          <optgroup key={group} label={group}>
+            {options
+              .filter((option) => option.group === group)
+              .map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.label}
+                </option>
+              ))}
           </optgroup>
-        )}
+        ))}
         <option value={CUSTOM}>Other…</option>
       </Select>
 
@@ -117,7 +134,9 @@ export function MaterialPicker({
             list={`${id}-materials`}
             placeholder="Material, e.g. PETG"
             value={value.material}
-            onChange={(event) => onChange({ ...value, material: event.target.value })}
+            onChange={(event) =>
+              onChange({ ...value, material: event.target.value, spoolmanSpoolId: null })
+            }
           />
           <datalist id={`${id}-materials`}>
             {materials.map((material) => (
@@ -128,7 +147,9 @@ export function MaterialPicker({
             aria-label="Colour name"
             placeholder="Colour, e.g. Galaxy Black"
             value={value.colorName}
-            onChange={(event) => onChange({ ...value, colorName: event.target.value })}
+            onChange={(event) =>
+              onChange({ ...value, colorName: event.target.value, spoolmanSpoolId: null })
+            }
           />
           <span className="flex items-center gap-1">
             <input
@@ -136,7 +157,11 @@ export function MaterialPicker({
               aria-label="Colour"
               value={value.colorHex || '#808080'}
               onChange={(event) =>
-                onChange({ ...value, colorHex: event.target.value.toLowerCase() })
+                onChange({
+                  ...value,
+                  colorHex: event.target.value.toLowerCase(),
+                  spoolmanSpoolId: null,
+                })
               }
               className={
                 value.colorHex
@@ -149,7 +174,7 @@ export function MaterialPicker({
                 type="button"
                 aria-label="No specific colour"
                 title="No specific colour"
-                onClick={() => onChange({ ...value, colorHex: '' })}
+                onClick={() => onChange({ ...value, colorHex: '', spoolmanSpoolId: null })}
                 className="text-[var(--color-ink-faint)] hover:text-[var(--color-ink)]"
               >
                 <X className="size-4" />

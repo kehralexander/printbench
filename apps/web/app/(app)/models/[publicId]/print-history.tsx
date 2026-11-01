@@ -96,6 +96,11 @@ export interface PrintStatsView {
 
 interface Props {
   spools: Spool[]
+  /**
+   * False when Spoolman owns the inventory: the "spools used" section is
+   * hidden, since stock is deducted elsewhere.
+   */
+  spoolInventory?: boolean
   publicId: string
   prints: PrintRunView[]
   stats: PrintStatsView
@@ -122,6 +127,7 @@ export function PrintHistory({
   suggestions,
   canLog,
   spools,
+  spoolInventory = true,
 }: Props) {
   const router = useRouter()
   const [formOpen, setFormOpen] = useState(false)
@@ -188,6 +194,7 @@ export function PrintHistory({
               publicId={publicId}
               initial={editing}
               spools={spools}
+              spoolInventory={spoolInventory}
               files={files}
               suggestions={suggestions}
               pending={pending}
@@ -405,6 +412,7 @@ function PrintForm({
   publicId,
   initial,
   spools,
+  spoolInventory,
   files,
   suggestions,
   pending,
@@ -415,6 +423,7 @@ function PrintForm({
   publicId: string
   initial: PrintRunView | null
   spools: Spool[]
+  spoolInventory: boolean
   files: { id: string; filename: string }[]
   suggestions: { materials: string[]; printers: string[]; filamentBrands: string[] }
   pending: boolean
@@ -595,117 +604,119 @@ function PrintForm({
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
-      <div className="space-y-3 rounded-[var(--radius-control)] border border-[var(--color-border)] p-3">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <h3 className="text-sm font-medium">Spools used</h3>
-          <Button
-            type="button"
-            size="sm"
-            variant="secondary"
-            disabled={pending || !spools.some((s) => !s.archived)}
-            onClick={() => setUsageRows([...usageRows, { spoolId: '', grams: '' }])}
-          >
-            Add spool
-          </Button>
-        </div>
-        <p className="text-xs text-[var(--color-ink-muted)]">
-          Optional. Finished prints deduct recorded grams, including failed prints. Still-printing
-          amounts are estimates.
-        </p>
-        {usageRows.map((row, index) => (
-          <div key={index} className="grid items-end gap-2 sm:grid-cols-[1fr_8rem_auto]">
-            <Field label={`Spool ${index + 1}`} htmlFor={`usage-spool-${index}`}>
-              <Select
-                id={`usage-spool-${index}`}
-                required
-                value={row.spoolId}
-                onChange={(e) => {
-                  const id = e.target.value
-                  setUsageRows(usageRows.map((r, i) => (i === index ? { ...r, spoolId: id } : r)))
-                  const chosen = spools.find((s) => s.id === id)
-                  if (chosen && usageRows.length === 1) {
-                    setMaterial(chosen.filament.material)
-                    setFilamentBrand(chosen.filament.brand ?? '')
-                    setColorName(chosen.filament.colorName ?? '')
-                    setColorHex(chosen.filament.colorHex ?? '')
-                    if (!nozzleTemp) setNozzleTemp(chosen.filament.nozzleTempC?.toString() ?? '')
-                    if (!bedTemp) setBedTemp(chosen.filament.bedTempC?.toString() ?? '')
-                  }
-                }}
-              >
-                <option value="">Choose spool…</option>
-                {spools
-                  .filter(
-                    (s) => !s.archived || initial?.filamentUsage.some((u) => u.spoolId === s.id),
-                  )
-                  .map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {[s.label, s.filament.brand, s.filament.name, s.filament.colorName]
-                        .filter(Boolean)
-                        .join(' · ')}{' '}
-                      ({s.remainingG} g){s.archived ? ' · archived' : ''}
-                    </option>
-                  ))}
-              </Select>
-            </Field>
-            <Field label="Used (g)" htmlFor={`usage-grams-${index}`}>
-              <Input
-                id={`usage-grams-${index}`}
-                type="number"
-                required
-                min="0"
-                step="0.01"
-                value={row.grams}
-                onChange={(e) =>
-                  setUsageRows(
-                    usageRows.map((r, i) => (i === index ? { ...r, grams: e.target.value } : r)),
-                  )
-                }
-              />
-            </Field>
+      {spoolInventory && (
+        <div className="space-y-3 rounded-[var(--radius-control)] border border-[var(--color-border)] p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 className="text-sm font-medium">Spools used</h3>
             <Button
               type="button"
-              variant="ghost"
-              onClick={() => setUsageRows(usageRows.filter((_, i) => i !== index))}
-              aria-label={`Remove spool ${index + 1}`}
+              size="sm"
+              variant="secondary"
+              disabled={pending || !spools.some((s) => !s.archived)}
+              onClick={() => setUsageRows([...usageRows, { spoolId: '', grams: '' }])}
             >
-              Remove
+              Add spool
             </Button>
           </div>
-        ))}
-        {usageRows.length > 0 && (
-          <>
-            <p className="text-sm">
-              Total: {usageTotal} g · Estimated cost: {automaticCost || 'unknown'}
-            </p>
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={manualCost}
-                onChange={(e) => setManualCost(e.target.checked)}
-              />
-              Override total cost
-            </label>
-            {manualCost && (
-              <Field label="Total print cost" htmlFor="spool-print-cost">
+          <p className="text-xs text-[var(--color-ink-muted)]">
+            Optional. Finished prints deduct recorded grams, including failed prints. Still-printing
+            amounts are estimates.
+          </p>
+          {usageRows.map((row, index) => (
+            <div key={index} className="grid items-end gap-2 sm:grid-cols-[1fr_8rem_auto]">
+              <Field label={`Spool ${index + 1}`} htmlFor={`usage-spool-${index}`}>
+                <Select
+                  id={`usage-spool-${index}`}
+                  required
+                  value={row.spoolId}
+                  onChange={(e) => {
+                    const id = e.target.value
+                    setUsageRows(usageRows.map((r, i) => (i === index ? { ...r, spoolId: id } : r)))
+                    const chosen = spools.find((s) => s.id === id)
+                    if (chosen && usageRows.length === 1) {
+                      setMaterial(chosen.filament.material)
+                      setFilamentBrand(chosen.filament.brand ?? '')
+                      setColorName(chosen.filament.colorName ?? '')
+                      setColorHex(chosen.filament.colorHex ?? '')
+                      if (!nozzleTemp) setNozzleTemp(chosen.filament.nozzleTempC?.toString() ?? '')
+                      if (!bedTemp) setBedTemp(chosen.filament.bedTempC?.toString() ?? '')
+                    }
+                  }}
+                >
+                  <option value="">Choose spool…</option>
+                  {spools
+                    .filter(
+                      (s) => !s.archived || initial?.filamentUsage.some((u) => u.spoolId === s.id),
+                    )
+                    .map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {[s.label, s.filament.brand, s.filament.name, s.filament.colorName]
+                          .filter(Boolean)
+                          .join(' · ')}{' '}
+                        ({s.remainingG} g){s.archived ? ' · archived' : ''}
+                      </option>
+                    ))}
+                </Select>
+              </Field>
+              <Field label="Used (g)" htmlFor={`usage-grams-${index}`}>
                 <Input
-                  id="spool-print-cost"
+                  id={`usage-grams-${index}`}
                   type="number"
+                  required
                   min="0"
                   step="0.01"
-                  value={cost}
-                  onChange={(e) => setCost(e.target.value)}
+                  value={row.grams}
+                  onChange={(e) =>
+                    setUsageRows(
+                      usageRows.map((r, i) => (i === index ? { ...r, grams: e.target.value } : r)),
+                    )
+                  }
                 />
               </Field>
-            )}
-          </>
-        )}
-        {!spools.length && (
-          <Link href="/filaments" className="text-sm text-[var(--color-accent)]">
-            Add your first spool in Filaments
-          </Link>
-        )}
-      </div>
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => setUsageRows(usageRows.filter((_, i) => i !== index))}
+                aria-label={`Remove spool ${index + 1}`}
+              >
+                Remove
+              </Button>
+            </div>
+          ))}
+          {usageRows.length > 0 && (
+            <>
+              <p className="text-sm">
+                Total: {usageTotal} g · Estimated cost: {automaticCost || 'unknown'}
+              </p>
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={manualCost}
+                  onChange={(e) => setManualCost(e.target.checked)}
+                />
+                Override total cost
+              </label>
+              {manualCost && (
+                <Field label="Total print cost" htmlFor="spool-print-cost">
+                  <Input
+                    id="spool-print-cost"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={cost}
+                    onChange={(e) => setCost(e.target.value)}
+                  />
+                </Field>
+              )}
+            </>
+          )}
+          {!spools.length && (
+            <Link href="/filaments" className="text-sm text-[var(--color-accent)]">
+              Add your first spool in Filaments
+            </Link>
+          )}
+        </div>
+      )}
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         <Field label="Outcome" htmlFor="print-status">
           <Select value={status} onChange={(e) => setStatus(e.target.value as PrintStatus)}>

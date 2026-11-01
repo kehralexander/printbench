@@ -78,6 +78,7 @@ export async function addRequests(input: {
   material?: string | null
   colorHex?: string | null
   colorName?: string | null
+  spoolmanSpoolId?: number | null
 }): Promise<AddResult> {
   try {
     const user = await requireUser()
@@ -108,6 +109,7 @@ export async function addRequests(input: {
         material: input.material ?? null,
         colorHex: input.colorHex ?? null,
         colorName: input.colorName ?? null,
+        spoolmanSpoolId: input.spoolmanSpoolId ?? null,
         dueAt: input.dueAt ? new Date(input.dueAt) : null,
       })),
       user.id,
@@ -150,6 +152,7 @@ export async function addModelToQueue(input: {
   material?: string | null
   colorHex?: string | null
   colorName?: string | null
+  spoolmanSpoolId?: number | null
   modelFileId?: string | null
   /** Minutes per print; omitted lets the queue suggest one. */
   estimatedMin?: number | null
@@ -174,6 +177,7 @@ export async function addModelToQueue(input: {
         material: input.material ?? null,
         colorHex: input.colorHex ?? null,
         colorName: input.colorName ?? null,
+        spoolmanSpoolId: input.spoolmanSpoolId ?? null,
         estimatedMin: input.estimatedMin,
         requestedBy,
         requestedByUserId: requestedBy === null || requestedBy === user.name ? user.id : null,
