@@ -222,12 +222,14 @@ function Steps({ request }: { request: PrintRequest }) {
             aria-current={current ? 'step' : undefined}
             className="relative flex flex-col items-center text-center"
           >
-            {/* The line to the previous step, coloured once this step is reached. */}
+            {/* The line to the previous step, coloured once this step is reached.
+                It stops short of both dots: drawn after the previous step, it
+                would otherwise run across that step's dot. */}
             {index > 0 && (
               <span
                 aria-hidden
                 className={cn(
-                  'absolute top-3 right-1/2 h-0.5 w-full -translate-y-1/2',
+                  'absolute top-3 right-[calc(50%+1rem)] left-[calc(-50%+1rem)] h-0.5 -translate-y-1/2 rounded-full',
                   index <= reached ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]',
                 )}
               />

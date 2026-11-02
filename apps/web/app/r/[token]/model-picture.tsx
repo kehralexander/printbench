@@ -63,7 +63,7 @@ export function ModelPicture({
   const glide = 'transition-[clip-path] duration-1000 ease-linear motion-reduce:transition-none'
 
   return (
-    <div className="relative mb-6 size-40 overflow-hidden rounded-[var(--radius-card)] bg-[var(--color-surface-2)]">
+    <div className="relative mx-auto mb-6 size-40 overflow-hidden rounded-[var(--radius-card)] bg-[var(--color-surface-2)]">
       {src ? (
         <>
           {/* eslint-disable-next-line @next/next/no-img-element */}
