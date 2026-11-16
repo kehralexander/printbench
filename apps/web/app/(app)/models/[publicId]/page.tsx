@@ -195,7 +195,15 @@ export default async function ModelPage({ params }: { params: Promise<{ publicId
     }
   })
   const sourceLink = safeLinks.find((link) => link.title === 'Original model page')
-  const additionalLinks = safeLinks.filter((link) => link !== sourceLink)
+  // Imported or hand-edited sidecars can carry more than one original page;
+  // the extras would all read "Original model page", so name them by site.
+  const additionalLinks = safeLinks
+    .filter((link) => link !== sourceLink)
+    .map((link) =>
+      link.title === 'Original model page'
+        ? { ...link, title: link.host?.replace(/^www\./i, '') ?? null }
+        : link,
+    )
 
   // Grouping by category makes a 40-file model legible; a flat list does not.
   const byCategory = new Map<string, FileRow[]>()
