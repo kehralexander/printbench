@@ -66,6 +66,46 @@ describe('is the filament loaded', () => {
     ).toBeNull()
   })
 
+  it('needs every filament of a multi-colour print on one printer', () => {
+    const red = { spoolmanSpoolId: null, material: 'PLA', colorHex: '#ff0000' }
+    const white = { spoolmanSpoolId: null, material: 'PLA', colorHex: '#ffffff' }
+    const navy = { spoolmanSpoolId: null, material: 'PLA', colorHex: '#17223b' }
+    expect(loadedFilament([white, navy], ace)).toMatchObject({
+      loaded: true,
+      matches: [{ slot: { index: 0 } }, { slot: { index: 1 } }],
+    })
+    // White and red: one colour is loaded, the other is not, so the print is not ready.
+    expect(loadedFilament([white, red], ace)).toMatchObject({ loaded: false, missing: [red] })
+  })
+
+  it('does not count both colours as loaded when each is on a different printer', () => {
+    const printers = [
+      { printerName: 'A', slots: [slot(0, { material: 'PLA', colorHex: '#ff0000' })] },
+      { printerName: 'B', slots: [slot(0, { material: 'PLA', colorHex: '#0000ff' })] },
+    ]
+    const verdict = loadedFilament(
+      [
+        { spoolmanSpoolId: null, material: 'PLA', colorHex: '#ff0000' },
+        { spoolmanSpoolId: null, material: 'PLA', colorHex: '#0000ff' },
+      ],
+      printers,
+    )
+    expect(verdict).toMatchObject({ loaded: false })
+    expect(verdict?.loaded === false && verdict.missing).toHaveLength(1)
+  })
+
+  it('ignores filament rows that ask for nothing', () => {
+    expect(
+      loadedFilament(
+        [
+          { spoolmanSpoolId: null, material: null, colorHex: null },
+          { spoolmanSpoolId: 17, material: null, colorHex: null },
+        ],
+        ace,
+      ),
+    ).toMatchObject({ loaded: true, matches: [{ slot: { index: 1 } }] })
+  })
+
   it('groups material variants into families', () => {
     expect(materialFamily('PLA Matte')).toBe('PLA')
     expect(materialFamily('PLA+')).toBe('PLA')

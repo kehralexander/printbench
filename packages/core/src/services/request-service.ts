@@ -3,7 +3,22 @@ import { customAlphabet } from 'nanoid'
 import type { Database } from '@pb/db'
 import { schema } from '@pb/db'
 import { deletePrint, logPrint } from './print-service'
-import { isParsableSlicerFile, readGcodeMetadata } from './slicer-metadata-service'
+import { FilamentValidationError } from './filament-fields'
+import type { PriceStatus } from './pricing'
+import {
+  FilamentRowError,
+  cleanFilaments,
+  mergeFilaments,
+  totalGrams,
+  type RequestFilament,
+  type RequestFilamentInput,
+} from './request-filaments'
+import {
+  isParsableSlicerFile,
+  readGcodeMetadata,
+  readGcodeWithTools,
+} from './slicer-metadata-service'
+import type { GcodeTool } from '../slicer/gcode-tools'
 import { createStorageAdapter, libraryLocationFromRow } from '../storage/factory'
 import {
   MAX_BULK_REQUESTS,
@@ -50,16 +65,23 @@ export interface RequestInput {
   modelFileId?: string | null
   quantity?: number | null
   priority?: PrintRequestPriority | null
-  material?: string | null
-  colorHex?: string | null
-  colorName?: string | null
+  /**
+   * The filaments it prints in. Empty is "any". When a G-code file is linked
+   * these are merged with its tools: numbered and weighed by the file.
+   */
+  filaments?: RequestFilamentInput[] | null
   /**
    * Minutes for one print. `undefined` lets the queue suggest one from the
    * linked model; `null` is an explicit "no estimate".
    */
   estimatedMin?: number | null
-  /** The Spoolman spool asked for, when Spoolman is the inventory. */
-  spoolmanSpoolId?: number | null
+  /**
+   * Who pays. `undefined` links a customer whose name matches `requestedBy`
+   * exactly (case aside); `null` links none.
+   */
+  customerId?: string | null
+  /** A pricing tier key; null uses the customer's, then the instance default. */
+  pricingTier?: string | null
   dueAt?: Date | null
 }
 
@@ -91,15 +113,13 @@ export interface PrintRequest {
   quantity: number
   priority: PrintRequestPriority
   status: PrintRequestStatus
-  material: string | null
-  colorHex: string | null
-  colorName: string | null
+  /** Every filament it prints in, in tool order; empty for "any". */
+  filaments: RequestFilament[]
   /** Minutes for one print; the whole request takes this times `quantity`. */
   estimatedMin: number | null
   /** Set while it is on the printer. */
   startedAt: Date | null
-  spoolmanSpoolId: number | null
-  /** Grams for one print, from the chosen G-code. */
+  /** Grams for one print across every filament, from the chosen G-code. */
   filamentG: number | null
   /** Prints finished towards `quantity`, counted from the printer. */
   printsDone: number
@@ -109,6 +129,27 @@ export interface PrintRequest {
   position: number | null
   /** The requester's status link, once one has been made. */
   shareToken: string | null
+
+  pricingTier: string | null
+  customerId: string | null
+  customerName: string | null
+  priceStatus: PriceStatus
+  /** Frozen when quoted; what the requester is charged. */
+  quotedPrice: number | null
+  /** What it was expected to cost to make. Admin side only. */
+  quotedCost: number | null
+  quoteBreakdown: { label: string; amount: number }[] | null
+  quotedAt: Date | null
+  quoteExpiresAt: Date | null
+  acceptedAt: Date | null
+  declinedAt: Date | null
+  priceManual: boolean
+  /** Something the price depends on changed after it was quoted. */
+  needsRequote: boolean
+  invoiceId: string | null
+  invoiceNumber: number | null
+  /** Received so far, across every payment. */
+  paid: number
 
   dueAt: Date | null
   closedAt: Date | null
@@ -159,14 +200,6 @@ function cleanTitle(value: string): string {
   return trimmed.slice(0, MAX_TITLE)
 }
 
-function cleanColor(value: string | null | undefined): string | null {
-  if (!value) return null
-  if (!/^#[0-9a-f]{6}$/i.test(value)) {
-    throw new RequestValidationError('Colour must be a hex value like #1a2b3c.')
-  }
-  return value.toLowerCase()
-}
-
 function cleanPriority(value: PrintRequestPriority | null | undefined): PrintRequestPriority {
   if (!value) return 'normal'
   if (!REQUEST_PRIORITIES.includes(value)) {
@@ -199,14 +232,6 @@ function cleanEstimate(value: number | null | undefined): number | null {
     throw new RequestValidationError('The estimate must be between a minute and a month.')
   }
   return Math.round(value)
-}
-
-function cleanSpoolId(value: number | null | undefined): number | null {
-  if (value == null) return null
-  if (!Number.isInteger(value) || value < 1) {
-    throw new RequestValidationError('That is not a Spoolman spool.')
-  }
-  return value
 }
 
 function trimTo(value: string | null | undefined, max: number): string | null {
@@ -282,19 +307,28 @@ export async function suggestEstimate(
 /** What the slicer wrote into the G-code a request points at. */
 interface PlateFacts {
   durationMin: number | null
-  /** Filament for one print, in grams. */
+  /** Filament for one print, in grams, across every tool. */
   filamentG: number | null
+  /**
+   * The file's tools, when it is a G-code. Null when there is no G-code to
+   * read, which is different from a G-code that names no filament (empty).
+   */
+  tools: GcodeTool[] | null
 }
 
 /**
  * Reads the request's G-code: the chosen file, or the model's only G-code
  * when none was chosen. Several with none chosen are different plates, and
  * picking one would be a guess.
+ *
+ * `scanTools` reads the whole file to see which tools it really changes to —
+ * for linking a file, once, never for a suggestion in a form.
  */
 async function readPlate(
   db: Database,
   modelId: string,
   modelFileId: string | null,
+  options: { scanTools?: boolean } = {},
 ): Promise<PlateFacts> {
   const files = await db
     .select({
@@ -317,22 +351,36 @@ async function readPlate(
     : gcodes.length === 1
       ? gcodes[0]
       : undefined
-  if (!gcode) return { durationMin: null, filamentG: null }
+  if (!gcode) return { durationMin: null, filamentG: null, tools: null }
 
   const relativePath = gcode.model.isFileModel
     ? gcode.model.path
     : `${gcode.model.path}/${gcode.filename}`
-  const metadata = await readGcodeMetadata(
-    createStorageAdapter(libraryLocationFromRow(gcode.library)),
-    relativePath,
-    gcode.size,
-  )
+  const storage = createStorageAdapter(libraryLocationFromRow(gcode.library))
+  const metadata = options.scanTools
+    ? await readGcodeWithTools(storage, relativePath, gcode.size)
+    : await readGcodeMetadata(storage, relativePath, gcode.size)
   const minutes = metadata.durationMin
-  const grams = metadata.filamentUsedG
+  const tools = (metadata.filaments ?? []).map((tool) => ({
+    ...tool,
+    grams: tool.grams != null && tool.grams < 100_000 ? Math.round(tool.grams * 100) / 100 : null,
+  }))
+  // A file that gives grams but names no filament is still one tool's worth.
+  if (tools.length === 0 && metadata.filamentUsedG != null && metadata.filamentUsedG < 100_000) {
+    tools.push({
+      tool: 0,
+      material: null,
+      colorHex: null,
+      grams: Math.round(metadata.filamentUsedG * 100) / 100,
+      used: true,
+    })
+  }
+  const grams = metadata.filamentUsedG ?? totalGrams(tools.filter((tool) => tool.used))
   return {
     durationMin:
       minutes != null && minutes >= 1 && minutes <= MAX_ESTIMATE_MIN ? Math.round(minutes) : null,
     filamentG: grams != null && grams > 0 && grams < 100_000 ? Math.ceil(grams) : null,
+    tools,
   }
 }
 
@@ -346,6 +394,23 @@ export async function plateFilamentG(
     return (await readPlate(db, modelId, modelFileId)).filamentG
   } catch {
     return null
+  }
+}
+
+/**
+ * The filaments of the file a request would print, for a form to fill its
+ * rows from. Reads the whole file, so only on choosing one.
+ */
+export async function plateFilaments(
+  db: Database,
+  modelId: string,
+  modelFileId: string | null,
+): Promise<{ tools: GcodeTool[] | null; durationMin: number | null }> {
+  try {
+    const plate = await readPlate(db, modelId, modelFileId, { scanTools: true })
+    return { tools: plate.tools, durationMin: plate.durationMin }
+  } catch {
+    return { tools: null, durationMin: null }
   }
 }
 
@@ -377,17 +442,91 @@ async function quietFacts(
   db: Database,
   modelId: string | null,
   modelFileId: string | null,
-): Promise<{ estimatedMin: number | null; filamentG: number | null }> {
-  if (!modelId) return { estimatedMin: null, filamentG: null }
+): Promise<{ estimatedMin: number | null; tools: GcodeTool[] | null }> {
+  if (!modelId) return { estimatedMin: null, tools: null }
   try {
-    const plate = await readPlate(db, modelId, modelFileId)
+    const plate = await readPlate(db, modelId, modelFileId, { scanTools: true })
     const estimatedMin =
       plate.durationMin ?? (await historyEstimate(db, modelId, modelFileId))?.minutes ?? null
-    return { estimatedMin, filamentG: plate.filamentG }
+    return { estimatedMin, tools: plate.tools }
   } catch (error) {
     console.warn(`[queue] could not read details for model ${modelId}: ${String(error)}`)
-    return { estimatedMin: null, filamentG: null }
+    return { estimatedMin: null, tools: null }
   }
+}
+
+function filamentRows(input: RequestFilamentInput[] | null | undefined): RequestFilament[] {
+  try {
+    return cleanFilaments(input)
+  } catch (error) {
+    if (error instanceof FilamentRowError) throw new RequestValidationError(error.message)
+    throw error
+  }
+}
+
+/** Swaps a request's filament rows for these, in order. */
+async function writeFilaments(
+  db: Pick<Database, 'execute'>,
+  requestId: string,
+  rows: RequestFilament[],
+): Promise<void> {
+  await db.execute(sql`DELETE FROM print_request_filaments WHERE request_id = ${requestId}`)
+  for (const [position, row] of rows.entries()) {
+    await db.execute(sql`
+      INSERT INTO print_request_filaments
+        (request_id, position, tool, material, color_hex, color_name, spoolman_spool_id, spool_id, grams)
+      VALUES (${requestId}, ${position}, ${row.tool}, ${row.material}, ${row.colorHex},
+              ${row.colorName}, ${row.spoolmanSpoolId}, ${row.spoolId}::uuid, ${row.grams})`)
+  }
+}
+
+async function readFilaments(
+  db: Pick<Database, 'execute'>,
+  requestId: string,
+): Promise<RequestFilament[]> {
+  const rows = await db.execute<{
+    tool: number | null
+    material: string | null
+    color_hex: string | null
+    color_name: string | null
+    spoolman_spool_id: number | null
+    spool_id: string | null
+    grams: string | null
+  }>(sql`
+    SELECT tool, material, color_hex, color_name, spoolman_spool_id, spool_id, grams
+    FROM print_request_filaments WHERE request_id = ${requestId}
+    ORDER BY position, tool NULLS LAST`)
+  return rows.rows.map((row) => ({
+    tool: row.tool,
+    material: row.material,
+    colorHex: row.color_hex,
+    colorName: row.color_name,
+    spoolmanSpoolId: row.spoolman_spool_id,
+    spoolId: row.spool_id,
+    grams: row.grams == null ? null : Number(row.grams),
+  }))
+}
+
+/** The customer whose name this is, exactly but for case, or null. */
+async function customerNamed(db: Database, name: string | null): Promise<string | null> {
+  if (!name) return null
+  const rows = await db.execute<{ id: string }>(sql`
+    SELECT id FROM customers WHERE lower(name) = lower(${name}) LIMIT 1`)
+  return rows.rows[0]?.id ?? null
+}
+
+function cleanTier(value: string | null | undefined): string | null {
+  const key = value?.trim()
+  if (!key) return null
+  if (!/^[a-z0-9-]{1,60}$/.test(key))
+    throw new RequestValidationError('That is not a pricing tier.')
+  return key
+}
+
+function cleanCustomerId(value: string | null | undefined): string | null {
+  if (!value) return null
+  if (!/^[0-9a-f-]{36}$/i.test(value)) throw new RequestValidationError('That is not a customer.')
+  return value
 }
 
 /* ------------------------------------------------------------------ *
@@ -421,23 +560,32 @@ export async function createRequest(
   const facts = await quietFacts(db, modelId, modelFileId)
   const estimatedMin =
     input.estimatedMin === undefined ? facts.estimatedMin : cleanEstimate(input.estimatedMin)
+  const wished = filamentRows(input.filaments)
+  const filaments = facts.tools ? mergeFilaments(wished, facts.tools) : wished
+  const requestedBy = trimTo(input.requestedBy, MAX_NAME)
+  const customerId =
+    input.customerId === undefined
+      ? await customerNamed(db, requestedBy)
+      : cleanCustomerId(input.customerId)
 
-  const rows = await db.execute<{ id: string }>(sql`
-    INSERT INTO print_requests
-      (title, notes, requested_by, requested_by_user_id, model_id, model_file_id,
-       quantity, priority, material, color_hex, color_name, estimated_min, spoolman_spool_id,
-       filament_g, due_at, created_by)
-    VALUES (${title}, ${trimTo(input.notes, MAX_NOTES)}, ${trimTo(input.requestedBy, MAX_NAME)},
-            ${input.requestedByUserId ?? null}, ${modelId}, ${modelFileId},
-            ${cleanQuantity(input.quantity)},
-            ${cleanPriority(input.priority)}::print_request_priority,
-            ${trimTo(input.material, MAX_NAME)}, ${cleanColor(input.colorHex)},
-            ${trimTo(input.colorName, MAX_NAME)}, ${estimatedMin},
-            ${cleanSpoolId(input.spoolmanSpoolId)}, ${facts.filamentG},
-            ${input.dueAt ?? null}, ${createdBy})
-    RETURNING id`)
+  const id = await db.transaction(async (tx) => {
+    const rows = await tx.execute<{ id: string }>(sql`
+      INSERT INTO print_requests
+        (title, notes, requested_by, requested_by_user_id, model_id, model_file_id,
+         quantity, priority, estimated_min, customer_id, pricing_tier, due_at, created_by)
+      VALUES (${title}, ${trimTo(input.notes, MAX_NOTES)}, ${requestedBy},
+              ${input.requestedByUserId ?? null}, ${modelId}, ${modelFileId},
+              ${cleanQuantity(input.quantity)},
+              ${cleanPriority(input.priority)}::print_request_priority,
+              ${estimatedMin}, ${customerId}, ${cleanTier(input.pricingTier)},
+              ${input.dueAt ?? null}, ${createdBy})
+      RETURNING id`)
+    const id = rows.rows[0]!.id
+    await writeFilaments(tx, id, filaments)
+    return id
+  })
 
-  return { id: rows.rows[0]!.id, autoLinked }
+  return { id, autoLinked }
 }
 
 /**
@@ -490,11 +638,10 @@ export type RequestPatch = Partial<
     | 'requestedBy'
     | 'quantity'
     | 'priority'
-    | 'material'
-    | 'colorHex'
-    | 'colorName'
+    | 'filaments'
     | 'estimatedMin'
-    | 'spoolmanSpoolId'
+    | 'customerId'
+    | 'pricingTier'
     | 'dueAt'
   >
 >
@@ -506,34 +653,80 @@ export async function updateRequest(
 ): Promise<void> {
   const sets: ReturnType<typeof sql>[] = []
 
+  const current = (
+    await db.execute<{ quantity: number; pricing_tier: string | null; price_status: PriceStatus }>(
+      sql`SELECT quantity, pricing_tier, price_status FROM print_requests WHERE id = ${requestId}`,
+    )
+  ).rows[0]
+  if (!current) throw new RequestValidationError('That request is no longer in the queue.')
+  /** What the quote was worked out from has changed under it. */
+  let requote = false
+
   if (patch.title !== undefined) sets.push(sql`title = ${cleanTitle(patch.title)}`)
   if (patch.notes !== undefined) sets.push(sql`notes = ${trimTo(patch.notes, MAX_NOTES)}`)
   if (patch.requestedBy !== undefined) {
     sets.push(sql`requested_by = ${trimTo(patch.requestedBy, MAX_NAME)}`)
   }
-  if (patch.quantity !== undefined) sets.push(sql`quantity = ${cleanQuantity(patch.quantity)}`)
+  if (patch.quantity !== undefined) {
+    const quantity = cleanQuantity(patch.quantity)
+    if (quantity !== current.quantity) requote = true
+    sets.push(sql`quantity = ${quantity}`)
+  }
   if (patch.priority !== undefined) {
     sets.push(sql`priority = ${cleanPriority(patch.priority)}::print_request_priority`)
-  }
-  if (patch.material !== undefined) sets.push(sql`material = ${trimTo(patch.material, MAX_NAME)}`)
-  if (patch.colorHex !== undefined) sets.push(sql`color_hex = ${cleanColor(patch.colorHex)}`)
-  if (patch.colorName !== undefined) {
-    sets.push(sql`color_name = ${trimTo(patch.colorName, MAX_NAME)}`)
-  }
-  if (patch.spoolmanSpoolId !== undefined) {
-    sets.push(sql`spoolman_spool_id = ${cleanSpoolId(patch.spoolmanSpoolId)}`)
   }
   if (patch.estimatedMin !== undefined) {
     sets.push(sql`estimated_min = ${cleanEstimate(patch.estimatedMin)}`)
   }
+  if (patch.customerId !== undefined) {
+    sets.push(sql`customer_id = ${cleanCustomerId(patch.customerId)}`)
+  }
+  if (patch.pricingTier !== undefined) {
+    const tier = cleanTier(patch.pricingTier)
+    if (tier !== current.pricing_tier) requote = true
+    sets.push(sql`pricing_tier = ${tier}`)
+  }
   if (patch.dueAt !== undefined) sets.push(sql`due_at = ${patch.dueAt ?? null}`)
 
-  // Nothing to change is not an error — it is a form submitted untouched.
-  if (sets.length === 0) return
+  let filaments: RequestFilament[] | null = null
+  if (patch.filaments !== undefined) {
+    filaments = filamentRows(patch.filaments)
+    if (!sameFilaments(filaments, await readFilaments(db, requestId))) requote = true
+    else filaments = null
+  }
 
+  // Nothing to change is not an error — it is a form submitted untouched.
+  if (sets.length === 0 && filaments === null) return
+
+  if (requote) sets.push(REQUOTE)
   sets.push(sql`updated_at = now()`)
-  await db.execute(sql`
-    UPDATE print_requests SET ${sql.join(sets, sql`, `)} WHERE id = ${requestId}`)
+  await db.transaction(async (tx) => {
+    await tx.execute(sql`
+      UPDATE print_requests SET ${sql.join(sets, sql`, `)} WHERE id = ${requestId}`)
+    if (filaments) await writeFilaments(tx, requestId, filaments)
+  })
+}
+
+/**
+ * A quote stands as given: changing what it was worked out from flags it for
+ * quoting again rather than moving a price someone may already have agreed.
+ */
+const REQUOTE = sql`needs_requote = (price_status IN ('quoted', 'accepted'))`
+
+function sameFilaments(a: RequestFilament[], b: RequestFilament[]): boolean {
+  const key = (rows: RequestFilament[]) =>
+    JSON.stringify(
+      rows.map((row) => [
+        row.tool,
+        row.material,
+        row.colorHex,
+        row.colorName,
+        row.spoolmanSpoolId,
+        row.spoolId,
+        row.grams,
+      ]),
+    )
+  return key(a) === key(b)
 }
 
 /**
@@ -563,16 +756,13 @@ export async function setRequestStatus(
     status: PrintRequestStatus
     model_id: string | null
     model_file_id: string | null
-    material: string | null
-    color_hex: string | null
-    color_name: string | null
     started_at: Date | null
     quantity: number
     requested_by: string | null
     notes: string | null
     print_run_id: string | null
   }>(sql`
-    SELECT status, model_id, model_file_id, material, color_hex, color_name, started_at,
+    SELECT status, model_id, model_file_id, started_at,
            quantity, requested_by, notes, print_run_id
     FROM print_requests WHERE id = ${requestId} LIMIT 1`)
 
@@ -587,14 +777,16 @@ export async function setRequestStatus(
      * twice is a double click, not a second print.
      */
     if (current.model_id && !printRunId) {
-      const run = await logPrint(db, {
+      const filaments = await readFilaments(db, requestId)
+      const first = filaments[0]
+      const entry = {
         modelId: current.model_id,
         modelFileId: current.model_file_id,
         userId: options.userId ?? null,
-        material: current.material,
-        colorHex: current.color_hex,
-        colorName: current.color_name,
-        status: 'success',
+        material: first?.material ?? null,
+        colorHex: first?.colorHex ?? null,
+        colorName: first?.colorName ?? null,
+        status: 'success' as const,
         /*
          * Started when it went on the printer, if it went through "Start";
          * otherwise unknown. Guessing a start time would invent a duration,
@@ -604,8 +796,9 @@ export async function setRequestStatus(
         startedAt: current.started_at ? new Date(current.started_at) : null,
         finishedAt: new Date(),
         notes: historyNote(current.requested_by, current.quantity, current.notes),
-      })
-      printRunId = run.id
+      }
+      const usage = queueUsage(filaments, current.quantity)
+      printRunId = (await logPrintWithUsage(db, entry, usage)).id
     }
   } else if (current.status === 'done' && next !== 'done' && printRunId) {
     /*
@@ -617,7 +810,8 @@ export async function setRequestStatus(
      * filament weight or a printer name has been adopted as a real record of a
      * real print, and deleting it would throw away work the queue never owned.
      */
-    if (await isUntouchedRun(db, printRunId, current.started_at)) {
+    const usage = queueUsage(await readFilaments(db, requestId), current.quantity)
+    if (await isUntouchedRun(db, printRunId, current.started_at, usage)) {
       await deletePrint(db, printRunId)
     }
     printRunId = null
@@ -672,6 +866,46 @@ function historyNote(
 }
 
 /**
+ * What a finished request used from PrintBench's own spools: each filament
+ * with a spool and grams, times the prints it stands for. Two tools on one
+ * spool are one usage row.
+ */
+export function queueUsage(
+  filaments: readonly RequestFilament[],
+  prints: number,
+): { spoolId: string; grams: number }[] {
+  const bySpool = new Map<string, number>()
+  for (const row of filaments) {
+    if (!row.spoolId || row.grams == null || row.grams <= 0) continue
+    bySpool.set(row.spoolId, (bySpool.get(row.spoolId) ?? 0) + row.grams * prints)
+  }
+  return [...bySpool].map(([spoolId, grams]) => ({
+    spoolId,
+    grams: Math.round(grams * 100) / 100,
+  }))
+}
+
+/**
+ * Logs with the spool usage, or without it when a spool cannot take it — an
+ * archived spool, or one deleted since it was picked. The print happened
+ * either way, and the history is worth more than the stock line.
+ */
+export async function logPrintWithUsage(
+  db: Database,
+  entry: Parameters<typeof logPrint>[1],
+  usage: { spoolId: string; grams: number }[],
+): Promise<{ id: string }> {
+  if (usage.length === 0) return logPrint(db, entry)
+  try {
+    return await logPrint(db, { ...entry, filamentUsage: usage })
+  } catch (error) {
+    if (!(error instanceof FilamentValidationError)) throw error
+    console.warn(`[queue] logged a print without its spool usage: ${error.message}`)
+    return logPrint(db, entry)
+  }
+}
+
+/**
  * True when a print run still looks exactly as the queue created it.
  *
  * Checks the fields only a person would fill in. Material and colour are
@@ -682,6 +916,8 @@ async function isUntouchedRun(
   db: Database,
   printRunId: string,
   requestStartedAt: Date | null,
+  /** The spool usage the queue itself recorded; anything else is someone's edit. */
+  queueWrote: { spoolId: string; grams: number }[] = [],
 ): Promise<boolean> {
   /*
    * A start time and duration the queue wrote itself — from the request's own
@@ -689,17 +925,30 @@ async function isUntouchedRun(
    */
   const startedAt = requestStartedAt ? new Date(requestStartedAt) : null
   const rows = await db.execute<{ untouched: boolean }>(sql`
-    SELECT (rating IS NULL AND filament_used_g IS NULL
+    SELECT (rating IS NULL
             AND printer_name IS NULL AND layer_height_mm IS NULL AND nozzle_mm IS NULL
             AND photo_key IS NULL AND status = 'success'
             AND (started_at IS NULL OR started_at = ${startedAt})
             AND (duration_min IS NULL OR (started_at IS NOT NULL AND finished_at IS NOT NULL
                  AND duration_min = greatest(0, round(extract(epoch FROM finished_at - started_at) / 60))))
-            AND NOT EXISTS (SELECT 1 FROM print_filament_usage WHERE print_run_id = print_runs.id)) AS untouched
+            AND (filament_used_g IS NULL OR ${queueWrote.length > 0})
+            ) AS untouched
     FROM print_runs WHERE id = ${printRunId} LIMIT 1`)
 
   // Already gone — deleted from the model page. Nothing to withdraw.
-  return rows.rows[0]?.untouched === true
+  if (rows.rows[0]?.untouched !== true) return false
+
+  const usage = await db.execute<{ spool_id: string; grams: string }>(sql`
+    SELECT spool_id, grams FROM print_filament_usage WHERE print_run_id = ${printRunId}`)
+  const key = (rows: { spoolId: string; grams: number }[]) =>
+    rows
+      .map((row) => `${row.spoolId}:${row.grams.toFixed(2)}`)
+      .sort()
+      .join(',')
+  return (
+    key(usage.rows.map((row) => ({ spoolId: row.spool_id, grams: Number(row.grams) }))) ===
+    key(queueWrote)
+  )
 }
 
 /** Attaches the request to a model, or clears the link when modelId is null. */
@@ -713,20 +962,32 @@ export async function linkRequest(
     throw new RequestValidationError('That file does not belong to that model.')
   }
 
-  // Fills an empty estimate only; one that was typed in stays as it is. The
-  // grams are derived from the file, so they follow it.
-  const facts = await quietFacts(db, modelId, modelId ? modelFileId : null)
+  const before = (
+    await db.execute<{ model_id: string | null; model_file_id: string | null }>(sql`
+      SELECT model_id, model_file_id FROM print_requests WHERE id = ${requestId}`)
+  ).rows[0]
+  if (!before) throw new RequestValidationError('That request is no longer in the queue.')
 
-  await db.execute(sql`
-    UPDATE print_requests
-    SET model_id = ${modelId},
-        -- Clearing the model clears the file with it, or the row keeps a file
-        -- id that the check constraint would reject on the next write.
-        model_file_id = ${modelId ? modelFileId : null},
-        estimated_min = coalesce(estimated_min, ${facts.estimatedMin}::int),
-        filament_g = ${facts.filamentG}::int,
-        updated_at = now()
-    WHERE id = ${requestId}`)
+  // Fills an empty estimate only; one that was typed in stays as it is. The
+  // filaments are numbered and weighed by the file, so they follow it.
+  const facts = await quietFacts(db, modelId, modelId ? modelFileId : null)
+  const filaments = mergeFilaments(await readFilaments(db, requestId), facts.tools ?? [])
+  const fileChanged =
+    before.model_id !== modelId || before.model_file_id !== (modelId ? modelFileId : null)
+
+  await db.transaction(async (tx) => {
+    await tx.execute(sql`
+      UPDATE print_requests
+      SET model_id = ${modelId},
+          -- Clearing the model clears the file with it, or the row keeps a file
+          -- id that the check constraint would reject on the next write.
+          model_file_id = ${modelId ? modelFileId : null},
+          estimated_min = coalesce(estimated_min, ${facts.estimatedMin}::int),
+          ${fileChanged ? sql`${REQUOTE},` : sql``}
+          updated_at = now()
+      WHERE id = ${requestId}`)
+    await writeFilaments(tx, requestId, filaments)
+  })
 }
 
 export async function deleteRequest(db: Database, requestId: string): Promise<void> {
@@ -753,13 +1014,9 @@ type Row = {
   quantity: number
   priority: PrintRequestPriority
   status: PrintRequestStatus
-  material: string | null
-  color_hex: string | null
-  color_name: string | null
+  filaments: (Omit<RequestFilament, 'grams'> & { grams: number | string | null })[]
   estimated_min: number | null
   started_at: string | null
-  spoolman_spool_id: number | null
-  filament_g: number | null
   prints_done: number
   live_printer: string | null
   live_progress: number | null
@@ -768,6 +1025,22 @@ type Row = {
   live_paused: boolean | null
   position: number | null
   share_token: string | null
+  pricing_tier: string | null
+  customer_id: string | null
+  customer_name: string | null
+  price_status: PriceStatus
+  quoted_price: string | null
+  quoted_cost: string | null
+  quote_breakdown: { label: string; amount: number }[] | null
+  quoted_at: string | null
+  quote_expires_at: string | null
+  accepted_at: string | null
+  declined_at: string | null
+  price_manual: boolean
+  needs_requote: boolean
+  invoice_id: string | null
+  invoice_number: number | null
+  paid: string | number
   due_at: string | null
   closed_at: string | null
   print_run_id: string | null
@@ -784,8 +1057,20 @@ const SELECT_REQUEST = sql`
            WHERE f.model_id = m.id AND f.thumb_state = 'ok' AND f.missing_at IS NULL
            ORDER BY (f.category = 'slicer'), f.size DESC LIMIT 1) AS thumb_file_id,
          r.model_file_id, mf.filename,
-         r.quantity, r.priority, r.status, r.material, r.color_hex, r.color_name,
-         r.estimated_min, r.started_at, r.spoolman_spool_id, r.filament_g, r.due_at, r.closed_at, r.print_run_id,
+         r.quantity, r.priority, r.status,
+         coalesce((
+           SELECT json_agg(json_build_object(
+                    'tool', f.tool, 'material', f.material, 'colorHex', f.color_hex,
+                    'colorName', f.color_name, 'spoolmanSpoolId', f.spoolman_spool_id,
+                    'spoolId', f.spool_id, 'grams', f.grams)
+                  ORDER BY f.position, f.tool NULLS LAST)
+           FROM print_request_filaments f WHERE f.request_id = r.id), '[]'::json) AS filaments,
+         r.estimated_min, r.started_at, r.due_at, r.closed_at, r.print_run_id,
+         r.pricing_tier, r.customer_id, c.name AS customer_name, r.price_status,
+         r.quoted_price, r.quoted_cost, r.quote_breakdown, r.quoted_at, r.quote_expires_at,
+         r.accepted_at, r.declined_at, r.price_manual, r.needs_requote, r.invoice_id,
+         inv.number AS invoice_number,
+         coalesce((SELECT sum(amount) FROM request_payments p WHERE p.request_id = r.id), 0) AS paid,
          r.prints_done, r.position, r.share_token, lh.name AS live_printer,
          CASE WHEN lh.fresh THEN (lh.status->>'progress')::float END AS live_progress,
          CASE WHEN lh.fresh THEN (lh.status->>'remainingSec')::float END AS live_remaining_sec,
@@ -801,9 +1086,18 @@ const SELECT_REQUEST = sql`
   ) lh ON true
   LEFT JOIN models m ON m.id = r.model_id
   LEFT JOIN model_files mf ON mf.id = r.model_file_id
+  LEFT JOIN customers c ON c.id = r.customer_id
+  LEFT JOIN invoices inv ON inv.id = r.invoice_id
   LEFT JOIN "user" u ON u.id = r.created_by`
 
 function toRequest(row: Row): PrintRequest {
+  const filaments = row.filaments.map((filament) => ({
+    ...filament,
+    grams: filament.grams == null ? null : Number(filament.grams),
+  }))
+  const grams = totalGrams(filaments)
+  const money = (value: string | null) => (value == null ? null : Number(value))
+  const date = (value: string | null) => (value ? new Date(value) : null)
   return {
     id: row.id,
     title: row.title,
@@ -820,13 +1114,10 @@ function toRequest(row: Row): PrintRequest {
     quantity: row.quantity,
     priority: row.priority,
     status: row.status,
-    material: row.material,
-    colorHex: row.color_hex,
-    colorName: row.color_name,
+    filaments,
     estimatedMin: row.estimated_min,
     startedAt: row.started_at ? new Date(row.started_at) : null,
-    spoolmanSpoolId: row.spoolman_spool_id,
-    filamentG: row.filament_g,
+    filamentG: grams == null ? null : Math.ceil(grams),
     printsDone: row.prints_done,
     live: row.live_printer
       ? {
@@ -839,6 +1130,22 @@ function toRequest(row: Row): PrintRequest {
       : null,
     position: row.position,
     shareToken: row.share_token,
+    pricingTier: row.pricing_tier,
+    customerId: row.customer_id,
+    customerName: row.customer_name,
+    priceStatus: row.price_status,
+    quotedPrice: money(row.quoted_price),
+    quotedCost: money(row.quoted_cost),
+    quoteBreakdown: row.quote_breakdown,
+    quotedAt: date(row.quoted_at),
+    quoteExpiresAt: date(row.quote_expires_at),
+    acceptedAt: date(row.accepted_at),
+    declinedAt: date(row.declined_at),
+    priceManual: row.price_manual,
+    needsRequote: row.needs_requote,
+    invoiceId: row.invoice_id,
+    invoiceNumber: row.invoice_number,
+    paid: Number(row.paid),
     dueAt: row.due_at ? new Date(row.due_at) : null,
     closedAt: row.closed_at ? new Date(row.closed_at) : null,
     printRunId: row.print_run_id,

@@ -162,6 +162,18 @@ describe('choosing slots', () => {
     ])
   })
 
+  it("places each tool by the request's filament for that tool", () => {
+    // Sliced blue and white; asked for red on T0, and T2 left to the file.
+    const plan = planSlots([paint(0, 'PLA', '#0000ff'), paint(2, 'PLA', '#ffffff')], threePla, [
+      { tool: 0, material: 'PLA', colorHex: '#d01010', spoolmanSpoolId: null },
+    ])
+    expect(plan.sure).toBe(true)
+    expect(plan.paints.map((p) => [p.paint, p.slot])).toEqual([
+      [0, 1],
+      [2, 0],
+    ])
+  })
+
   it('does not hand two tools the same slot', () => {
     const plan = planSlots(
       [paint(0, 'PLA', '#ff0000'), paint(1, 'PLA', '#ee0000')],

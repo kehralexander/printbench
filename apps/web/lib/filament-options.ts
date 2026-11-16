@@ -1,4 +1,10 @@
-import { describeSpoolmanSpool, listFilaments, listSpoolmanSpools, spoolmanEnabled } from '@pb/core'
+import {
+  describeSpoolmanSpool,
+  listFilaments,
+  listSpoolmanSpools,
+  listSpools,
+  spoolmanEnabled,
+} from '@pb/core'
 import type { Database } from '@pb/db'
 
 /** One pickable material and colour, as the queue's picker shows it. */
@@ -10,6 +16,8 @@ export interface FilamentOption {
   colorHex: string | null
   /** Set when the option is a Spoolman spool rather than a filament type. */
   spoolmanSpoolId?: number
+  /** Set when the option is one of PrintBench's own spools. */
+  spoolId?: string
   /** Picker group heading. */
   group: string
 }
@@ -25,7 +33,9 @@ export interface FilamentOption {
  *
  * Without Spoolman these are PrintBench's own filaments on hand, with two
  * brands of the same material and colour collapsed into one choice, since a
- * request names a look, not a supplier.
+ * request names a look, not a supplier — and then the spools themselves, for
+ * when it matters which one: a spool picked here is what a finished print
+ * records its usage against, and what prices it.
  */
 export async function filamentOptions(db: Database): Promise<FilamentOption[]> {
   if (spoolmanEnabled()) {
@@ -71,5 +81,27 @@ export async function filamentOptions(db: Database): Promise<FilamentOption[]> {
     })
   }
 
-  return options.sort((a, b) => a.label.localeCompare(b.label))
+  options.sort((a, b) => a.label.localeCompare(b.label))
+
+  const spools = (await listSpools(db))
+    .filter((spool) => !spool.archived && !spool.spoolArchived && spool.remainingG > 0)
+    .map((spool) => ({
+      id: `spool-${spool.id}`,
+      label: [
+        spool.filament.material,
+        spool.filament.colorName?.trim() || spool.filament.name,
+        spool.label,
+        `${Math.round(spool.remainingG)} g`,
+      ]
+        .filter(Boolean)
+        .join(' · '),
+      material: spool.filament.material,
+      colorName: spool.filament.colorName?.trim() || null,
+      colorHex: spool.filament.colorHex?.toLowerCase() || null,
+      spoolId: spool.id,
+      group: 'Spools',
+    }))
+    .sort((a, b) => a.label.localeCompare(b.label))
+
+  return [...options, ...spools]
 }

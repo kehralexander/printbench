@@ -89,6 +89,10 @@ export const printHosts = pgTable('print_hosts', {
   endpoint: text('endpoint').notNull(),
   /** Encrypted at rest by packages/core/crypto. */
   credentials: text('credentials'),
+  /** Average draw while printing, for the electricity in a price. */
+  watts: integer('watts'),
+  /** Wear, nozzles, build plates and depreciation per printing hour. */
+  hourlyRate: numeric('hourly_rate', { precision: 10, scale: 2 }),
   lastSeenOk: timestamp('last_seen_ok', { withTimezone: true }),
   /**
    * The last status the worker read, and when. Lets the queue show live times

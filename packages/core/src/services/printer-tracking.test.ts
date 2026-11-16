@@ -161,7 +161,7 @@ describe('printer tracking', { tags: ['integration'] }, () => {
         modelFileId: plateId,
         quantity,
         estimatedMin,
-        material: 'PLA',
+        filaments: [{ material: 'PLA' }],
       },
       null,
     )

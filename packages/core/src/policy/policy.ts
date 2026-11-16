@@ -35,6 +35,7 @@ export type Action =
   | 'file:upload'
   | 'print:log'
   | 'request:manage'
+  | 'billing:manage'
   // Personal, available to anyone signed in
   | 'list:manage'
   | 'like:toggle'
@@ -75,6 +76,12 @@ const MINIMUM: Record<Action, Role> = {
   'file:upload': ROLES.member,
   'print:log': ROLES.member,
   'request:manage': ROLES.member,
+  /*
+   * Quoting, taking payments, customers and invoices: the money side of
+   * working the queue, for the same people. Prices and costs are never shown
+   * to a viewer, who may well be the one being charged.
+   */
+  'billing:manage': ROLES.member,
   'scan:trigger': ROLES.member,
   'problem:resolve': ROLES.member,
   'printhost:send': ROLES.member,

@@ -1,4 +1,4 @@
-import { loadedFilament, type WantedFilament } from './loaded-filament'
+import { loadedFilament, namesFilament, type WantedFilament } from './loaded-filament'
 import type { FilamentSlot } from './printer-status'
 
 /**
@@ -10,9 +10,16 @@ import type { FilamentSlot } from './printer-status'
  * so they cost no extra reads and are easy to test.
  */
 
-export interface PlannedRequest extends WantedFilament {
+export interface PlannedRequest {
   id: string
   title: string
+  /** Every filament it prints in; empty for "any". */
+  filaments: WantedFilament[]
+  /**
+   * Waiting on its requester — a quote not yet accepted, a deposit not yet
+   * paid — so it is not offered as next up.
+   */
+  held?: boolean
 }
 
 export interface IdlePrinter {
@@ -29,7 +36,7 @@ export interface LoadNextHint {
   ready: { request: PlannedRequest; slot: FilamentSlot | null } | null
   /**
    * The most urgent request, when it is not the ready one because its
-   * filament is not loaded: what to swap in for it.
+   * filaments are not loaded: what to swap in for it.
    */
   swap: { request: PlannedRequest; filament: string } | null
 }
@@ -44,9 +51,10 @@ export interface LoadNextHint {
  * what is next.
  */
 export function loadNextHints(printers: IdlePrinter[], queue: PlannedRequest[]): LoadNextHint[] {
-  if (queue.length === 0) return []
+  const ready = queue.filter((request) => !request.held)
+  if (ready.length === 0) return []
   return printers.map((printer) => {
-    const head = queue[0]!
+    const head = ready[0]!
     if (printer.slots.length === 0) {
       return {
         printerId: printer.id,
@@ -56,21 +64,28 @@ export function loadNextHints(printers: IdlePrinter[], queue: PlannedRequest[]):
       }
     }
     const here = [{ printerName: printer.name, slots: printer.slots }]
-    let ready: LoadNextHint['ready'] = null
-    for (const request of queue) {
-      const verdict = loadedFilament(request, here)
+    let next: LoadNextHint['ready'] = null
+    let headMissing: WantedFilament[] = []
+    for (const request of ready) {
+      const verdict = loadedFilament(request.filaments, here)
       if (verdict === null) {
-        ready = { request, slot: null }
+        next = { request, slot: null }
         break
       }
       if (verdict.loaded) {
-        ready = { request, slot: verdict.slot }
+        next = { request, slot: verdict.slot }
         break
       }
+      if (request.id === head.id) headMissing = verdict.missing
     }
     const swap =
-      ready?.request.id === head.id ? null : { request: head, filament: describeFilament(head) }
-    return { printerId: printer.id, printerName: printer.name, ready, swap }
+      next?.request.id === head.id
+        ? null
+        : {
+            request: head,
+            filament: describeFilaments(headMissing.length > 0 ? headMissing : head.filaments),
+          }
+    return { printerId: printer.id, printerName: printer.name, ready: next, swap }
   })
 }
 
@@ -79,16 +94,28 @@ export function describeFilament(wanted: WantedFilament): string {
   if (wanted.spoolmanSpoolId != null) {
     return [`spool #${wanted.spoolmanSpoolId}`, wanted.material].filter(Boolean).join(' · ')
   }
-  return [wanted.material, wanted.colorHex].filter(Boolean).join(' ') || 'its filament'
+  return (
+    [wanted.material, wanted.colorName || wanted.colorHex].filter(Boolean).join(' ') ||
+    'its filament'
+  )
+}
+
+/** Several filaments, "PLA #ff0000 and PETG #0000ff". */
+export function describeFilaments(wanted: readonly WantedFilament[]): string {
+  const named = wanted.filter(namesFilament)
+  if (named.length === 0) return 'its filament'
+  const parts = named.map(describeFilament)
+  return parts.length === 1
+    ? parts[0]!
+    : `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`
 }
 
 export interface ForecastRequest {
   id: string
   title: string
   status: 'requested' | 'printing'
-  spoolmanSpoolId: number | null
-  /** Grams for one print. */
-  filamentG: number | null
+  /** Each filament's spool and its grams for one print. */
+  filaments: { spoolmanSpoolId: number | null; grams: number | null }[]
   /** Prints still to do, the running one included. */
   left: number
   /** How far the running print is, 0–1, when one is. */
@@ -109,11 +136,11 @@ export interface SpoolForecast {
 }
 
 /**
- * Walks the open queue in order, print by print, taking each one's grams
- * from its spool, and says where each spool runs dry.
+ * Walks the open queue in order, print by print, taking each filament's
+ * grams from its spool, and says where each spool runs dry.
  *
  * What is on the printer goes first and counts only what it has still to
- * use. Requests without grams cannot be counted and are passed over; a spool
+ * use. Filaments without grams cannot be counted and are passed over; a spool
  * Spoolman does not know (or that reports no weight) is left out.
  */
 export function spoolForecast(
@@ -127,33 +154,43 @@ export function spoolForecast(
   const spools = new Map<number, SpoolForecast & { usedG: number }>()
 
   for (const request of ordered) {
-    if (request.spoolmanSpoolId == null || request.filamentG == null) continue
-    const remainingG = remaining.get(request.spoolmanSpoolId)
-    if (remainingG == null) continue
-    let spool = spools.get(request.spoolmanSpoolId)
-    if (!spool) {
-      spool = {
-        spoolId: request.spoolmanSpoolId,
-        remainingG,
-        neededG: 0,
-        prints: 0,
-        runsOutAfter: null,
-        shortRequestIds: [],
-        usedG: 0,
-      }
-      spools.set(request.spoolmanSpoolId, spool)
+    // Two tools on the same spool draw from it together.
+    const perSpool = new Map<number, number>()
+    for (const filament of request.filaments) {
+      if (filament.spoolmanSpoolId == null || filament.grams == null) continue
+      perSpool.set(
+        filament.spoolmanSpoolId,
+        (perSpool.get(filament.spoolmanSpoolId) ?? 0) + filament.grams,
+      )
     }
-    for (let copy = 0; copy < Math.max(1, request.left); copy++) {
-      const grams =
-        copy === 0 && request.status === 'printing' && request.progress != null
-          ? request.filamentG * (1 - Math.min(Math.max(request.progress, 0), 1))
-          : request.filamentG
-      spool.usedG += grams
-      spool.neededG += grams
-      spool.prints += 1
-      if (spool.usedG > spool.remainingG) {
-        spool.runsOutAfter ??= spool.prints - 1
-        if (!spool.shortRequestIds.includes(request.id)) spool.shortRequestIds.push(request.id)
+    for (const [spoolId, gramsEach] of perSpool) {
+      const remainingG = remaining.get(spoolId)
+      if (remainingG == null) continue
+      let spool = spools.get(spoolId)
+      if (!spool) {
+        spool = {
+          spoolId,
+          remainingG,
+          neededG: 0,
+          prints: 0,
+          runsOutAfter: null,
+          shortRequestIds: [],
+          usedG: 0,
+        }
+        spools.set(spoolId, spool)
+      }
+      for (let copy = 0; copy < Math.max(1, request.left); copy++) {
+        const grams =
+          copy === 0 && request.status === 'printing' && request.progress != null
+            ? gramsEach * (1 - Math.min(Math.max(request.progress, 0), 1))
+            : gramsEach
+        spool.usedG += grams
+        spool.neededG += grams
+        spool.prints += 1
+        if (spool.usedG > spool.remainingG) {
+          spool.runsOutAfter ??= spool.prints - 1
+          if (!spool.shortRequestIds.includes(request.id)) spool.shortRequestIds.push(request.id)
+        }
       }
     }
   }

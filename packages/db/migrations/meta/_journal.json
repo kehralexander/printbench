@@ -169,6 +169,13 @@
       "when": 1793535483907,
       "tag": "0023_printer_job_idle",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1794794569712,
+      "tag": "0024_multi_filament_pricing",
+      "breakpoints": true
     }
   ]
 }

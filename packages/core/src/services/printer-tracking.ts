@@ -2,7 +2,8 @@ import { sql } from 'drizzle-orm'
 import type { Database } from '@pb/db'
 import { logPrint } from './print-service'
 import type { PrinterStatus } from './printer-status'
-import { plateFilamentG } from './request-service'
+import { logPrintWithUsage, plateFilamentG, queueUsage } from './request-service'
+import type { RequestFilament } from './request-filaments'
 
 /**
  * Turning printer status into history and queue progress.
@@ -279,10 +280,8 @@ type RequestFacts = {
   prints_done: number
   printer_job_id: string | null
   print_run_id: string | null
-  material: string | null
-  color_hex: string | null
-  color_name: string | null
   requested_by: string | null
+  filaments: RequestFilament[]
 }
 
 async function finishJob(
@@ -304,9 +303,16 @@ async function finishJob(
   const request = job.request_id
     ? (
         await db.execute<RequestFacts>(sql`
-          SELECT status, quantity, prints_done, printer_job_id, print_run_id,
-                 material, color_hex, color_name, requested_by
-          FROM print_requests WHERE id = ${job.request_id}`)
+          SELECT r.status, r.quantity, r.prints_done, r.printer_job_id, r.print_run_id,
+                 r.requested_by,
+                 coalesce((
+                   SELECT json_agg(json_build_object(
+                            'tool', f.tool, 'material', f.material, 'colorHex', f.color_hex,
+                            'colorName', f.color_name, 'spoolmanSpoolId', f.spoolman_spool_id,
+                            'spoolId', f.spool_id, 'grams', f.grams)
+                          ORDER BY f.position, f.tool NULLS LAST)
+                   FROM print_request_filaments f WHERE f.request_id = r.id), '[]'::json) AS filaments
+          FROM print_requests r WHERE r.id = ${job.request_id}`)
       ).rows[0]
     : undefined
 
@@ -327,21 +333,37 @@ async function finishJob(
     } else {
       const filamentG =
         outcome === 'success' ? await plateFilamentG(db, job.model_id, job.model_file_id) : null
-      const run = await logPrint(db, {
-        modelId: job.model_id,
-        modelFileId: job.model_file_id,
-        recordingKey: `printer-job:${job.id}`,
-        printerName: host.name,
-        status: outcome === 'success' ? 'success' : 'failed',
-        material: request?.material ?? null,
-        colorHex: request?.color_hex ?? null,
-        colorName: request?.color_name ?? null,
-        startedAt,
-        finishedAt: now,
-        durationMin,
-        filamentUsedG: filamentG,
-        notes: jobNote(host.name, outcome, progress, request?.requested_by ?? null),
-      })
+      const first = request?.filaments[0]
+      // A failed print used what it got through; a finished one, all of it.
+      const share = outcome === 'success' ? 1 : Math.min(Math.max(progress, 0), 1)
+      const usage = request
+        ? queueUsage(
+            request.filaments.map((row) => ({
+              ...row,
+              grams: row.grams == null ? null : Number(row.grams) * share,
+            })),
+            1,
+          )
+        : []
+      const run = await logPrintWithUsage(
+        db,
+        {
+          modelId: job.model_id,
+          modelFileId: job.model_file_id,
+          recordingKey: `printer-job:${job.id}`,
+          printerName: host.name,
+          status: outcome === 'success' ? 'success' : 'failed',
+          material: first?.material ?? null,
+          colorHex: first?.colorHex ?? null,
+          colorName: first?.colorName ?? null,
+          startedAt,
+          finishedAt: now,
+          durationMin,
+          filamentUsedG: filamentG,
+          notes: jobNote(host.name, outcome, progress, request?.requested_by ?? null),
+        },
+        usage,
+      )
       printRunId = run.id
     }
   }

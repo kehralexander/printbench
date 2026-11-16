@@ -1,6 +1,14 @@
 import { notFound } from 'next/navigation'
 import { Box, Check, CircleSlash, PackageCheck, Printer, Hourglass } from 'lucide-react'
-import { formatEstimate, getSettings, requestProgressByToken, type PrintRequest } from '@pb/core'
+import {
+  formatEstimate,
+  formatMoney,
+  getSettings,
+  quoteExpired,
+  requestProgressByToken,
+  type PricingSettings,
+  type PrintRequest,
+} from '@pb/core'
 import { getDb } from '@pb/db'
 import { AutoRefresh } from '@/components/ui/auto-refresh'
 import { Card } from '@/components/ui/card'
@@ -9,7 +17,9 @@ import { Swatch } from '@/components/ui/swatch'
 import { PageHeader } from '@/components/shell/page-header'
 import { LiveProgressBar } from '@/components/printer/live-progress'
 import { cn } from '@/lib/cn'
+import { formatDate } from '@/lib/format'
 import { ModelPicture } from './model-picture'
+import { QuoteAnswer } from './quote-answer'
 
 export const dynamic = 'force-dynamic'
 
@@ -52,7 +62,7 @@ export default async function RequestStatusPage({
 }) {
   const { token } = await params
   const db = getDb()
-  const [progress, { siteName }] = await Promise.all([
+  const [progress, { siteName, pricing }] = await Promise.all([
     requestProgressByToken(db, token),
     getSettings(db),
   ])
@@ -159,6 +169,10 @@ export default async function RequestStatusPage({
         {request.quantity > 1 && request.status !== 'cancelled' && <Copies request={request} />}
       </Card>
 
+      {pricing.enabled && request.priceStatus !== 'none' && (
+        <Price request={request} pricing={pricing} token={token} />
+      )}
+
       <p className="mt-6 text-xs text-[var(--color-ink-faint)]">
         This page updates by itself. Times are estimates from the slicer and the printer.
       </p>
@@ -186,19 +200,144 @@ function Headline({ icon, text, tone }: { icon: React.ReactNode; text: string; t
 }
 
 function Description({ request }: { request: PrintRequest }) {
-  const filament = [request.material, request.colorName].filter(Boolean).join(' · ')
-  if (!request.requestedBy && !filament) return null
+  // One entry per tool that names something; a row with neither material nor
+  // colour says nothing to the asker. No rows at all is "any filament", which
+  // is not worth saying either.
+  const filaments = request.filaments
+    .map((filament) => ({
+      key: filament.tool,
+      colorHex: filament.colorHex,
+      text: [filament.material, filament.colorName].filter(Boolean).join(' · '),
+    }))
+    .filter((filament) => filament.text || filament.colorHex)
+  if (!request.requestedBy && filaments.length === 0) return null
   return (
     <>
       {request.requestedBy && `For ${request.requestedBy}`}
-      {request.requestedBy && filament && ' · '}
-      {filament && (
-        <span className="inline-flex items-center gap-1.5 align-middle">
-          {request.colorHex && <Swatch color={request.colorHex} />}
-          {filament}
+      {filaments.map((filament, index) => (
+        <span key={filament.key}>
+          {(index > 0 || request.requestedBy) && ' · '}
+          <span className="inline-flex items-center gap-1.5 align-middle">
+            {filament.colorHex && (
+              <Swatch
+                color={filament.colorHex}
+                label={filament.text ? undefined : 'Filament colour'}
+              />
+            )}
+            {filament.text}
+          </span>
         </span>
-      )}
+      ))}
     </>
+  )
+}
+
+/** What the price status means to the person paying, in their words rather than the queue's. */
+const PRICE_STATUS_TEXT: Record<Exclude<PrintRequest['priceStatus'], 'none'>, string> = {
+  quoted: 'Waiting for your answer',
+  accepted: 'Accepted',
+  declined: 'Declined',
+  invoiced: 'Invoiced',
+  paid: 'Paid',
+  waived: 'No charge',
+}
+
+/**
+ * The quote, and what is left to do about it. Only the price and, if the
+ * admin allows, its breakdown — never what it costs to make.
+ */
+function Price({
+  request,
+  pricing,
+  token,
+}: {
+  request: PrintRequest
+  pricing: PricingSettings
+  token: string
+}) {
+  if (request.priceStatus === 'none') return null
+  const money = (amount: number) => formatMoney(amount, pricing.currency)
+  const expired = quoteExpired(request)
+  const price = request.quotedPrice
+  // Part payments only: a fully paid request says so in its status.
+  const left = price != null && request.paid > 0 ? price - request.paid : null
+  const partlyPaid = left != null && left > 0.005 && request.priceStatus !== 'waived'
+  const canAnswer =
+    request.priceStatus === 'quoted' &&
+    !expired &&
+    !request.needsRequote &&
+    request.status !== 'cancelled'
+  const breakdown =
+    pricing.showBreakdownToRequester && !request.needsRequote ? request.quoteBreakdown : null
+
+  return (
+    <Card className="mt-4 space-y-3 p-5">
+      <div className="flex items-baseline justify-between gap-3">
+        <p className="text-sm font-medium text-[var(--color-ink-muted)]">Price</p>
+        <p className="text-sm font-medium">
+          {request.needsRequote
+            ? 'Being updated'
+            : expired
+              ? 'Expired'
+              : PRICE_STATUS_TEXT[request.priceStatus]}
+          {request.priceStatus === 'invoiced' &&
+            request.invoiceNumber != null &&
+            ` · invoice no. ${request.invoiceNumber}`}
+        </p>
+      </div>
+
+      {request.needsRequote ? (
+        <p className="text-sm text-[var(--color-ink-muted)]">
+          Something changed since the price was worked out. It is being updated — this page will
+          show the new price.
+        </p>
+      ) : (
+        price != null && (
+          <p className="text-2xl font-semibold tabular-nums">
+            {money(price)}
+            {pricing.taxMode === 'vat' && (
+              <span className="ml-2 text-sm font-normal text-[var(--color-ink-muted)]">
+                incl. VAT
+              </span>
+            )}
+          </p>
+        )
+      )}
+
+      {breakdown && breakdown.length > 0 && (
+        <dl className="space-y-1 border-t border-[var(--color-border)] pt-3 text-sm">
+          {breakdown.map((line, index) => (
+            <div key={index} className="flex justify-between gap-3">
+              <dt className="text-[var(--color-ink-muted)]">{line.label}</dt>
+              <dd className="tabular-nums">{money(line.amount)}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
+
+      {partlyPaid && (
+        <p className="text-sm">
+          Paid so far {money(request.paid)}
+          <span className="text-[var(--color-ink-muted)]"> · {money(left!)} left to pay</span>
+        </p>
+      )}
+
+      {request.priceStatus === 'quoted' &&
+        !request.needsRequote &&
+        (expired ? (
+          <p className="text-sm text-[var(--color-danger)]">
+            This quote has expired — ask for a new quote.
+          </p>
+        ) : (
+          request.quoteExpiresAt && (
+            <p className="text-sm text-[var(--color-ink-muted)]">
+              Valid until {formatDate(request.quoteExpiresAt)}
+            </p>
+          )
+        ))}
+
+      {canAnswer && <QuoteAnswer token={token} />}
+    </Card>
   )
 }
 

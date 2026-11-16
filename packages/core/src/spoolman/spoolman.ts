@@ -28,6 +28,10 @@ export interface SpoolmanSpool {
   remainingG: number | null
   /** The spool's filament weight when full. */
   initialG: number | null
+  /** What the spool cost: its own price, else its filament's. */
+  price: number | null
+  /** `price` over the full weight; null when either is unknown. */
+  costPerGram: number | null
   location: string | null
   comment: string | null
   archived: boolean
@@ -104,6 +108,8 @@ function toSpool(raw: unknown): SpoolmanSpool | null {
   const vendor = (filament.vendor ?? null) as Json | null
   if (typeof spool.id !== 'number') return null
 
+  const initialG = grams(spool.initial_weight) ?? grams(filament.weight)
+  const price = grams(spool.price) ?? grams(filament.price)
   return {
     id: spool.id,
     filamentId: typeof filament.id === 'number' ? filament.id : 0,
@@ -112,7 +118,9 @@ function toSpool(raw: unknown): SpoolmanSpool | null {
     material: text(filament.material),
     colorHex: color(filament.color_hex) ?? color(firstOf(filament.multi_color_hexes)),
     remainingG: grams(spool.remaining_weight),
-    initialG: grams(spool.initial_weight) ?? grams(filament.weight),
+    initialG,
+    price,
+    costPerGram: price != null && initialG ? price / initialG : null,
     location: text(spool.location),
     comment: text(spool.comment),
     archived: spool.archived === true,

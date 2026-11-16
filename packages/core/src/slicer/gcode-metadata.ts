@@ -24,6 +24,8 @@
  * confidently filled in wrong costs them a wrong record they may never notice.
  */
 
+import { readGcodeTools, type GcodeTool } from './gcode-tools'
+
 export type ParsedNozzleType = 'brass' | 'hardened_steel' | 'ruby' | 'tungsten_carbide' | 'other'
 export type ParsedAdhesion = 'none' | 'skirt' | 'brim' | 'raft'
 
@@ -48,8 +50,11 @@ export interface GcodeMetadata {
   slicerName?: string
   slicerVersion?: string
   slicerProfile?: string
-  /** The file declared more than one tool or filament; we took the first. */
-  multiMaterial?: boolean
+  /**
+   * Every filament, one per tool. The single-value fields above are the first
+   * of these, for forms that record one filament; this is the whole list.
+   */
+  filaments?: GcodeTool[]
 }
 
 /**
@@ -78,7 +83,6 @@ export function parseGcodeMetadata(head: string, tail: string): GcodeMetadata {
     const value = number(nozzle.first)
     // Above 2 mm it is not a nozzle, it is a misread field.
     if (value != null && value > 0 && value <= 2) out.nozzleMm = value
-    if (nozzle.multiple) out.multiMaterial = true
   }
 
   const nozzleType = firstOf(config, 'nozzle_type')
@@ -99,7 +103,6 @@ export function parseGcodeMetadata(head: string, tail: string): GcodeMetadata {
   const material = firstOf(config, 'filament_type')
   if (material && !isPlaceholder(material.first)) {
     out.material = material.first
-    if (material.multiple) out.multiMaterial = true
   }
 
   const vendor = firstOf(config, 'filament_vendor')
@@ -129,6 +132,10 @@ export function parseGcodeMetadata(head: string, tail: string): GcodeMetadata {
       config.get('total filament weight [g]'),
   )
   if (grams != null && grams >= 0) out.filamentUsedG = grams
+
+  // Which of them the body uses is left to a caller that reads the whole file.
+  const tools = readGcodeTools(head, tail)
+  if (tools.length > 0) out.filaments = tools
 
   // --- temperatures -------------------------------------------------------
   const nozzleTempValue = integer(firstOf(config, 'nozzle_temperature', 'temperature')?.first)
@@ -252,8 +259,7 @@ function clean(value: string): string {
  * Reads a value that may carry one entry per extruder.
  *
  * `nozzle_diameter = 0.4,0.4` and `filament_type = "PLA";"PETG"` are both a
- * list. We take the first and flag it, rather than silently recording a
- * multi-material print as if it used one filament.
+ * list. We take the first; `filaments` carries the whole list.
  */
 function firstOf(
   config: Map<string, string>,

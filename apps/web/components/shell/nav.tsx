@@ -21,6 +21,7 @@ import {
   Upload,
   UserCog,
   Users,
+  Wallet,
 } from 'lucide-react'
 import type { Route } from 'next'
 import type { Action } from '@pb/core/policy'
@@ -60,6 +61,7 @@ const ICONS = {
   settings: Settings,
   upload: Upload,
   backup: DatabaseBackup,
+  billing: Wallet,
 }
 
 export const NAV_SECTIONS: { title?: string; items: NavItem[] }[] = [
@@ -68,6 +70,7 @@ export const NAV_SECTIONS: { title?: string; items: NavItem[] }[] = [
       { href: '/', label: 'Dashboard', icon: 'home' },
       { href: '/models', label: 'Models', icon: 'boxes' },
       { href: '/queue', label: 'Print queue', icon: 'queue', requires: 'request:create' },
+      { href: '/billing', label: 'Billing', icon: 'billing', requires: 'billing:manage' },
       { href: '/printers', label: 'Printer status', icon: 'printer', requires: 'model:view' },
       { href: '/upload', label: 'Upload', icon: 'upload', requires: 'file:upload' },
     ],

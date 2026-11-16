@@ -29,6 +29,8 @@ import {
   modelGeometrySql,
   openRequestsForModel,
   printStats,
+  formatMoney,
+  modelPriceEstimate,
   printSuggestions,
   slicersFor,
   spoolmanEnabled,
@@ -286,6 +288,12 @@ export default async function ModelPage({ params }: { params: Promise<{ publicId
       `)
     ).rows.length > 0
 
+  // "≈ €3.20 to print": what asking for one copy would come to, from its sliced files.
+  const priceEstimate =
+    canQueue && !model.is_package && settings.pricing.enabled
+      ? await modelPriceEstimate(db, model.id, settings.pricing)
+      : null
+
   const canCollect = can(policyUser, 'collection:edit')
   const allCollections = canCollect ? await listCollections(db) : []
 
@@ -390,6 +398,20 @@ export default async function ModelPage({ params }: { params: Promise<{ publicId
                 {model.file_count} {model.file_count === 1 ? 'file' : 'files'} ·{' '}
                 {formatBytes(Number(model.total_size))}
               </Badge>
+              {priceEstimate && (
+                <Badge
+                  tone="neutral"
+                  title={`One copy at ${priceEstimate.tier} rates, from the sliced ${
+                    priceEstimate.plates === 1 ? 'file' : 'files'
+                  }`}
+                >
+                  ≈{' '}
+                  {priceEstimate.min === priceEstimate.max
+                    ? formatMoney(priceEstimate.min, settings.pricing.currency)
+                    : `${formatMoney(priceEstimate.min, settings.pricing.currency)}–${formatMoney(priceEstimate.max, settings.pricing.currency)}`}{' '}
+                  to print
+                </Badge>
+              )}
               {user && <LikeButton publicId={model.public_id} liked={liked} />}
               {canQueue && !model.is_package && (
                 <QueueButton

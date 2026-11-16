@@ -14,7 +14,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Callout } from '@/components/ui/callout'
 import type { FilamentOption } from '@/lib/filament-options'
 import { addRequests } from './actions'
-import { MaterialPicker, NO_MATERIAL, materialInput } from './request-fields'
+import { FilamentRows, filamentValue, filamentsInput } from './request-fields'
 
 /**
  * Adding a batch.
@@ -51,7 +51,7 @@ export function AddRequests({
   const [priority, setPriority] = useState<PrintRequestPriority>('normal')
   const [dueAt, setDueAt] = useState('')
   const [notes, setNotes] = useState('')
-  const [material, setMaterial] = useState(NO_MATERIAL)
+  const [filamentRows, setFilamentRows] = useState(() => [filamentValue()])
   /** Remounts the picker after a submit, so it shows the cleared value. */
   const [pickerKey, setPickerKey] = useState(0)
   const [error, setError] = useState<string | null>(null)
@@ -73,7 +73,7 @@ export function AddRequests({
         priority,
         dueAt: dueAt || null,
         notes: notes.trim() || null,
-        ...materialInput(material),
+        filaments: filamentsInput(filamentRows),
       })
 
       if (!result.ok) {
@@ -85,7 +85,7 @@ export function AddRequests({
       setText('')
       setDueAt('')
       setNotes('')
-      setMaterial(NO_MATERIAL)
+      setFilamentRows([filamentValue()])
       setPickerKey((key) => key + 1)
       // The requester is kept: a batch is usually the start of a conversation
       // with one person, not the end of it.
@@ -179,10 +179,10 @@ export function AddRequests({
             </div>
 
             <div className="grid gap-3 sm:grid-cols-2">
-              <MaterialPicker
+              <FilamentRows
                 key={pickerKey}
-                value={material}
-                onChange={setMaterial}
+                rows={filamentRows}
+                onChange={setFilamentRows}
                 options={filaments}
               />
               <Field label="Notes" htmlFor="queue-notes" hint="Optional, for every line above">

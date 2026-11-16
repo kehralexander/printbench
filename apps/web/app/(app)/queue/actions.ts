@@ -2,9 +2,28 @@
 
 import { revalidatePath } from 'next/cache'
 import {
+  BillingError,
   PolicyError,
   RequestValidationError,
+  actualCost,
+  addPayment,
   assertCan,
+  createInvoice,
+  deletePayment,
+  getSettings,
+  listPayments,
+  listSpoolmanSpools,
+  plateFilaments,
+  priceRequest,
+  quoteRequest,
+  setPriceStatus,
+  spoolmanEnabled,
+  type ActualCost,
+  type GcodeTool,
+  type Payment,
+  type PaymentMethod,
+  type RequestFilamentInput,
+  type RequestQuote,
   can,
   canSendToPrinter,
   clearQueueOrder,
@@ -83,10 +102,7 @@ export async function addRequests(input: {
   priority?: PrintRequestPriority | null
   dueAt?: string | null
   notes?: string | null
-  material?: string | null
-  colorHex?: string | null
-  colorName?: string | null
-  spoolmanSpoolId?: number | null
+  filaments?: RequestFilamentInput[] | null
 }): Promise<AddResult> {
   try {
     const user = await requireUser()
@@ -114,10 +130,7 @@ export async function addRequests(input: {
         requestedByUserId: requestedBy === null || requestedBy === user.name ? user.id : null,
         priority: input.priority ?? 'normal',
         notes: input.notes ?? null,
-        material: input.material ?? null,
-        colorHex: input.colorHex ?? null,
-        colorName: input.colorName ?? null,
-        spoolmanSpoolId: input.spoolmanSpoolId ?? null,
+        filaments: input.filaments ?? null,
         dueAt: input.dueAt ? new Date(input.dueAt) : null,
       })),
       user.id,
@@ -157,10 +170,7 @@ export async function addModelToQueue(input: {
   quantity?: number
   requestedBy?: string | null
   notes?: string | null
-  material?: string | null
-  colorHex?: string | null
-  colorName?: string | null
-  spoolmanSpoolId?: number | null
+  filaments?: RequestFilamentInput[] | null
   modelFileId?: string | null
   /** Minutes per print; omitted lets the queue suggest one. */
   estimatedMin?: number | null
@@ -182,10 +192,7 @@ export async function addModelToQueue(input: {
         modelFileId: input.modelFileId ?? null,
         quantity: input.quantity ?? 1,
         notes: input.notes ?? null,
-        material: input.material ?? null,
-        colorHex: input.colorHex ?? null,
-        colorName: input.colorName ?? null,
-        spoolmanSpoolId: input.spoolmanSpoolId ?? null,
+        filaments: input.filaments ?? null,
         estimatedMin: input.estimatedMin,
         requestedBy,
         requestedByUserId: requestedBy === null || requestedBy === user.name ? user.id : null,
@@ -289,11 +296,8 @@ export async function sendRequestToPrinter(
 
     const sent = await sendFileToPrinter(request.modelFileId, host.id, true, {
       slots,
-      wanted: {
-        material: request.material,
-        colorHex: request.colorHex,
-        spoolmanSpoolId: request.spoolmanSpoolId,
-      },
+      // Each tool by the request's filament for it.
+      wanted: request.filaments,
     })
     if (!sent.ok) return sent
 
@@ -317,6 +321,16 @@ export async function editRequest(requestId: string, patch: RequestPatch): Promi
   try {
     const authorized = await authorize(requestId, 'edit')
     if (!authorized.ok) return authorized
+
+    // Who pays and at what rate is the charger's call, not the asker's.
+    const user = authorized.user as { id: string; role?: string | null; banned?: boolean | null }
+    if (
+      (patch.customerId !== undefined || patch.pricingTier !== undefined) &&
+      !can({ id: user.id, role: user.role ?? null, banned: user.banned ?? false }, 'billing:manage')
+    ) {
+      delete patch.customerId
+      delete patch.pricingTier
+    }
 
     await updateRequest(getDb(), requestId, patch)
     await audit(
@@ -528,6 +542,209 @@ export async function findModels(query: string): Promise<ModelChoice[]> {
     }))
 }
 
+/**
+ * The filaments of a file, for the editor to fill its rows in from when one
+ * is chosen. Reads the whole file to see which tools it really uses.
+ */
+export async function filamentsForFile(
+  modelId: string,
+  modelFileId: string | null,
+): Promise<{ tools: GcodeTool[] | null; durationMin: number | null }> {
+  try {
+    const user = await requireUser()
+    assertCan(
+      { id: user.id, role: user.role ?? null, banned: user.banned ?? false },
+      'request:create',
+    )
+    return await plateFilaments(getDb(), modelId, modelFileId)
+  } catch {
+    return { tools: null, durationMin: null }
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * The money side of a request
+ * ------------------------------------------------------------------ */
+
+async function authorizeBilling(requestId: string): Promise<Authorized> {
+  const user = await requireUser()
+  assertCan(
+    { id: user.id, role: user.role ?? null, banned: user.banned ?? false },
+    'billing:manage',
+  )
+  const request = await getRequest(getDb(), requestId)
+  if (!request) return { ok: false, error: 'That request is no longer in the queue.' }
+  return { ok: true, user, request }
+}
+
+async function spoolmanList() {
+  if (!spoolmanEnabled()) return null
+  const result = await listSpoolmanSpools()
+  return result.ok ? result.spools : null
+}
+
+export interface RequestPricing {
+  /** What it would be quoted at now. */
+  quote: RequestQuote
+  /** What its prints really cost so far, once there are any. */
+  actual: ActualCost | null
+  payments: Payment[]
+}
+
+/** Everything the editor's price panel shows: a live quote, the real cost and payments. */
+export async function requestPricing(
+  requestId: string,
+): Promise<{ ok: true; pricing: RequestPricing } | { ok: false; error: string }> {
+  try {
+    const authorized = await authorizeBilling(requestId)
+    if (!authorized.ok) return authorized
+    const db = getDb()
+    const { pricing } = await getSettings(db)
+    if (!pricing.enabled) return { ok: false, error: 'Pricing is switched off.' }
+    const [quote, actual, payments] = await Promise.all([
+      priceRequest(db, authorized.request, pricing, await spoolmanList()),
+      actualCost(db, authorized.request, pricing),
+      listPayments(db, [requestId]),
+    ])
+    return { ok: true, pricing: { quote, actual, payments } }
+  } catch (error) {
+    return { ok: false, error: describe(error, 'Could not work out a price.') }
+  }
+}
+
+/** Quotes the request: the worked-out price, or a typed one that is kept as typed. */
+export async function quoteForRequest(
+  requestId: string,
+  manualPrice: number | null = null,
+): Promise<Result> {
+  try {
+    const authorized = await authorizeBilling(requestId)
+    if (!authorized.ok) return authorized
+    const db = getDb()
+    const { pricing } = await getSettings(db)
+    if (!pricing.enabled) return { ok: false, error: 'Pricing is switched off.' }
+    const quote = await quoteRequest(db, requestId, pricing, {
+      manualPrice,
+      spoolman: await spoolmanList(),
+    })
+    await audit(
+      authorized.user,
+      'request.quoted',
+      { type: 'request', id: requestId, label: authorized.request.title },
+      { price: quote.price, manual: manualPrice != null },
+    )
+    revalidateFor(authorized.request)
+    return { ok: true }
+  } catch (error) {
+    return { ok: false, error: describe(error, 'Could not quote that request.') }
+  }
+}
+
+/** Accepted on the requester's behalf, declined, waived, or the quote withdrawn. */
+export async function setRequestPriceStatus(
+  requestId: string,
+  status: 'accepted' | 'declined' | 'waived' | 'none',
+): Promise<Result> {
+  try {
+    const authorized = await authorizeBilling(requestId)
+    if (!authorized.ok) return authorized
+    await setPriceStatus(getDb(), requestId, status)
+    await audit(
+      authorized.user,
+      'request.price_status',
+      { type: 'request', id: requestId, label: authorized.request.title },
+      { from: authorized.request.priceStatus, to: status },
+    )
+    revalidateFor(authorized.request)
+    return { ok: true }
+  } catch (error) {
+    return { ok: false, error: describe(error, 'Could not change that.') }
+  }
+}
+
+export async function recordPayment(
+  requestId: string,
+  input: { amount: number; method: PaymentMethod; paidAt?: string | null; note?: string | null },
+): Promise<Result> {
+  try {
+    const authorized = await authorizeBilling(requestId)
+    if (!authorized.ok) return authorized
+    await addPayment(
+      getDb(),
+      requestId,
+      {
+        amount: input.amount,
+        method: input.method,
+        paidAt: input.paidAt ? new Date(input.paidAt) : null,
+        note: input.note ?? null,
+      },
+      authorized.user.id,
+    )
+    await audit(
+      authorized.user,
+      'request.payment_recorded',
+      { type: 'request', id: requestId, label: authorized.request.title },
+      { amount: input.amount, method: input.method },
+    )
+    revalidateFor(authorized.request)
+    revalidatePath('/billing')
+    return { ok: true }
+  } catch (error) {
+    return { ok: false, error: describe(error, 'Could not record that payment.') }
+  }
+}
+
+export async function removePayment(requestId: string, paymentId: string): Promise<Result> {
+  try {
+    const authorized = await authorizeBilling(requestId)
+    if (!authorized.ok) return authorized
+    const payments = await listPayments(getDb(), [requestId])
+    if (!payments.some((payment) => payment.id === paymentId)) {
+      return { ok: false, error: 'That payment is not on this request.' }
+    }
+    await deletePayment(getDb(), paymentId)
+    await audit(authorized.user, 'request.payment_removed', {
+      type: 'request',
+      id: requestId,
+      label: authorized.request.title,
+    })
+    revalidateFor(authorized.request)
+    revalidatePath('/billing')
+    return { ok: true }
+  } catch (error) {
+    return { ok: false, error: describe(error, 'Could not remove that payment.') }
+  }
+}
+
+/** A receipt or invoice for this one request; several at once are on the billing page. */
+export async function invoiceRequest(
+  requestId: string,
+): Promise<{ ok: true; invoiceId: string } | { ok: false; error: string }> {
+  try {
+    const authorized = await authorizeBilling(requestId)
+    if (!authorized.ok) return authorized
+    const db = getDb()
+    const { pricing } = await getSettings(db)
+    const invoice = await createInvoice(
+      db,
+      { requestIds: [requestId] },
+      pricing,
+      authorized.user.id,
+    )
+    await audit(
+      authorized.user,
+      'invoice.created',
+      { type: 'request', id: requestId, label: authorized.request.title },
+      { number: invoice.number, total: invoice.total },
+    )
+    revalidateFor(authorized.request)
+    revalidatePath('/billing')
+    return { ok: true, invoiceId: invoice.id }
+  } catch (error) {
+    return { ok: false, error: describe(error, 'Could not write the invoice.') }
+  }
+}
+
 function revalidateFor(request: PrintRequest) {
   revalidatePath('/queue')
   revalidatePath('/')
@@ -538,7 +755,7 @@ function revalidateFor(request: PrintRequest) {
 }
 
 function describe(error: unknown, fallback: string): string {
-  if (error instanceof RequestValidationError) return error.message
+  if (error instanceof RequestValidationError || error instanceof BillingError) return error.message
   if (error instanceof PolicyError) return 'Not permitted.'
   console.error('[queue]', error)
   return fallback

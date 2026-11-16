@@ -187,22 +187,31 @@ describe('print time estimates', { tags: ['integration'] }, () => {
     })
 
     it('stores the Spoolman spool and refuses nonsense ids', async () => {
-      const { id } = await createRequest(db, { title: 'Vase', spoolmanSpoolId: 17 }, USER)
-      expect((await getRequest(db, id))?.spoolmanSpoolId).toBe(17)
-      await updateRequest(db, id, { spoolmanSpoolId: null })
-      expect((await getRequest(db, id))?.spoolmanSpoolId).toBeNull()
-      await expect(updateRequest(db, id, { spoolmanSpoolId: 1.5 })).rejects.toThrow()
+      const { id } = await createRequest(
+        db,
+        { title: 'Vase', filaments: [{ spoolmanSpoolId: 17 }] },
+        USER,
+      )
+      expect((await getRequest(db, id))?.filaments[0]?.spoolmanSpoolId).toBe(17)
+      await updateRequest(db, id, { filaments: [] })
+      expect((await getRequest(db, id))?.filaments).toEqual([])
+      await expect(
+        updateRequest(db, id, { filaments: [{ spoolmanSpoolId: 1.5 }] }),
+      ).rejects.toThrow()
     })
 
     it('stores colour names and edits estimates', async () => {
       const { id } = await createRequest(
         db,
-        { title: 'Vase', material: 'PLA', colorHex: '#112233', colorName: 'Galaxy Black' },
+        {
+          title: 'Vase',
+          filaments: [{ material: 'PLA', colorHex: '#112233', colorName: 'Galaxy Black' }],
+        },
         USER,
       )
       await updateRequest(db, id, { estimatedMin: 125 })
       expect(await getRequest(db, id)).toMatchObject({
-        colorName: 'Galaxy Black',
+        filaments: [{ colorName: 'Galaxy Black' }],
         estimatedMin: 125,
       })
       await expect(updateRequest(db, id, { estimatedMin: 0 })).rejects.toThrow()
@@ -213,7 +222,7 @@ describe('print time estimates', { tags: ['integration'] }, () => {
     it('records when it started, and gives the print history a real duration', async () => {
       const { id } = await createRequest(
         db,
-        { title: 'Plate', modelId: SINGLE, colorName: 'Galaxy Black' },
+        { title: 'Plate', modelId: SINGLE, filaments: [{ colorName: 'Galaxy Black' }] },
         USER,
       )
       await setRequestStatus(db, id, 'printing')

@@ -100,7 +100,9 @@ describe('parseGcodeMetadata', () => {
       slicerVersion: '2.8.0',
       slicerProfile: '0.20mm SPEED @MK4S',
     })
-    expect(result.multiMaterial).toBeUndefined()
+    expect(result.filaments).toEqual([
+      expect.objectContaining({ tool: 0, material: 'PLA', colorHex: '#ff8000', used: true }),
+    ])
   })
 
   it('takes cost per print, not the per-kilogram spool price', () => {
@@ -152,9 +154,9 @@ describe('parseGcodeMetadata', () => {
     })
   })
 
-  it('flags a multi-material file and takes the first value', () => {
+  it('lists every filament of a multi-material file and takes the first value', () => {
     const result = parseGcodeMetadata('', ORCA_TAIL)
-    expect(result.multiMaterial).toBe(true)
+    expect(result.filaments!.length).toBeGreaterThan(1)
     expect(result.material).toBe('PETG')
     expect(result.nozzleMm).toBe(0.6)
   })

@@ -204,7 +204,7 @@ describe('print queue', { tags: ['integration'] }, () => {
 
     it('refuses a colour that is not a hex value', async () => {
       await expect(
-        createRequest(db, { title: 'Vase', colorHex: 'red' }, USER),
+        createRequest(db, { title: 'Vase', filaments: [{ colorHex: 'red' }] }, USER),
       ).rejects.toBeInstanceOf(RequestValidationError)
     })
 
@@ -316,7 +316,11 @@ describe('print queue', { tags: ['integration'] }, () => {
     it('keeps the good lines when one is rejected', async () => {
       const result = await createRequests(
         db,
-        [{ title: 'Vase' }, { title: 'Bad', colorHex: 'not-a-colour' }, { title: 'Hook' }],
+        [
+          { title: 'Vase' },
+          { title: 'Bad', filaments: [{ colorHex: 'not-a-colour' }] },
+          { title: 'Hook' },
+        ],
         USER,
       )
 
@@ -394,7 +398,11 @@ describe('print queue', { tags: ['integration'] }, () => {
     it('logs a print when a model is linked', async () => {
       const { id } = await createRequest(
         db,
-        { title: 'Dragon', modelId: DRAGON, material: 'PETG', colorHex: '#1a2b3c' },
+        {
+          title: 'Dragon',
+          modelId: DRAGON,
+          filaments: [{ material: 'PETG', colorHex: '#1a2b3c' }],
+        },
         USER,
       )
 

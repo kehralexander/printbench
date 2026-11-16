@@ -4,6 +4,7 @@ import { useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { CheckCircle2, Loader2, Pencil, Plug, Plus, Printer, Trash2, XCircle } from 'lucide-react'
 import type { PrintHostProtocol } from '@pb/core'
+import { formatMoney } from '@pb/core/pricing'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
@@ -29,6 +30,8 @@ export interface PrintHostView {
   endpoint: string
   hasApiKey: boolean
   lastSeenOk: string | null
+  watts: number | null
+  hourlyRate: number | null
 }
 
 const PROTOCOLS: { value: PrintHostProtocol; label: string; hint: string }[] = [
@@ -84,7 +87,14 @@ export function AddPrinterButton({ variant }: { variant?: 'primary' | 'secondary
   )
 }
 
-export function PrinterList({ hosts }: { hosts: PrintHostView[] }) {
+export function PrinterList({
+  hosts,
+  currency,
+}: {
+  hosts: PrintHostView[]
+  /** The pricing currency, for showing a printer's machine rate. */
+  currency: string
+}) {
   const router = useRouter()
   const [editing, setEditing] = useState<PrintHostView | null>(null)
   const [probe, setProbe] = useState<Record<string, string>>({})
@@ -165,6 +175,17 @@ export function PrinterList({ hosts }: { hosts: PrintHostView[] }) {
                 <p className="truncate font-mono text-xs text-[var(--color-ink-muted)]">
                   {host.endpoint}
                 </p>
+                {(host.watts != null || host.hourlyRate != null) && (
+                  <p suppressHydrationWarning className="text-xs text-[var(--color-ink-faint)]">
+                    {[
+                      host.watts != null && `${host.watts} W while printing`,
+                      host.hourlyRate != null &&
+                        `${formatMoney(host.hourlyRate, currency)} per printing hour`,
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')}
+                  </p>
+                )}
                 {probe[host.id] && (
                   <p className="mt-1 flex items-center gap-1.5 text-xs">
                     {probe[host.id] === 'Checking…' ? (
@@ -229,6 +250,8 @@ function PrinterForm({
   const [endpoint, setEndpoint] = useState(host?.endpoint ?? '')
   const [apiKey, setApiKey] = useState('')
   const [clearKey, setClearKey] = useState(false)
+  const [watts, setWatts] = useState(host?.watts?.toString() ?? '')
+  const [hourlyRate, setHourlyRate] = useState(host?.hourlyRate?.toString() ?? '')
   const [error, setError] = useState<string | null>(null)
   const [pending, startTransition] = useTransition()
 
@@ -241,11 +264,18 @@ function PrinterForm({
      * what is there" rather than "remove it" — otherwise renaming a printer
      * would silently wipe its credential. Removing takes an explicit tick.
      */
+    const parsedWatts = parseOptional(watts)
+    const parsedRate = parseOptional(hourlyRate)
+    if (Number.isNaN(parsedWatts)) return setError('The power must be a number of watts.')
+    if (Number.isNaN(parsedRate)) return setError('The machine rate must be an amount.')
+
     const input: PrintHostInput = {
       name,
       protocol,
       endpoint,
       apiKey: clearKey ? '' : apiKey ? apiKey : host ? undefined : '',
+      watts: parsedWatts,
+      hourlyRate: parsedRate,
     }
 
     startTransition(async () => {
@@ -312,6 +342,33 @@ function PrinterForm({
         </Field>
       </div>
 
+      {/* Optional, and only for pricing: a printer is fully usable without them. */}
+      <div className="space-y-2">
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field label="Average power while printing (W)" htmlFor="host-watts">
+            <Input
+              inputMode="decimal"
+              value={watts}
+              onChange={(e) => setWatts(e.target.value)}
+              placeholder="Default"
+            />
+          </Field>
+
+          <Field label="Machine rate per printing hour" htmlFor="host-rate">
+            <Input
+              inputMode="decimal"
+              value={hourlyRate}
+              onChange={(e) => setHourlyRate(e.target.value)}
+              placeholder="Default"
+            />
+          </Field>
+        </div>
+        <p className="text-xs text-[var(--color-ink-faint)]">
+          These feed print prices: electricity, and wear on nozzles, plates and the machine. Leave
+          them blank to use the defaults under System settings → Pricing.
+        </p>
+      </div>
+
       {host?.hasApiKey && (
         <label className="flex items-center gap-2 text-sm text-[var(--color-ink-muted)]">
           <Checkbox checked={clearKey} onChange={(e) => setClearKey(e.target.checked)} />
@@ -332,4 +389,12 @@ function PrinterForm({
       </div>
     </form>
   )
+}
+
+/** Blank is "use the default" (null); anything else must be a number, a decimal comma allowed. */
+function parseOptional(text: string): number | null {
+  const trimmed = text.trim().replace(',', '.')
+  if (trimmed === '') return null
+  const n = Number(trimmed)
+  return Number.isFinite(n) ? n : NaN
 }

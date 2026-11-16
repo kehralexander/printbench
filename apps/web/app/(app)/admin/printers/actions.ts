@@ -23,6 +23,10 @@ export interface PrintHostInput {
   endpoint: string
   /** Undefined leaves the stored key alone; empty string clears it. */
   apiKey?: string
+  /** Average draw while printing, for the electricity in a price. Null uses the pricing default. */
+  watts?: number | null
+  /** Wear and depreciation per printing hour. Null uses the pricing default. */
+  hourlyRate?: number | null
 }
 
 async function requireAdmin() {
@@ -39,7 +43,34 @@ function validate(input: PrintHostInput): string | null {
   if (!isValidEndpoint(input.endpoint)) {
     return 'The address must be a full http or https URL, such as http://octopi.local.'
   }
+  // Bounds that no hobby printer comes near, so a slipped digit is caught
+  // before it puts a nonsense figure on every quote.
+  if (
+    input.watts != null &&
+    !(Number.isFinite(input.watts) && input.watts >= 0 && input.watts <= 10_000)
+  ) {
+    return 'The power must be between 0 and 10,000 W.'
+  }
+  if (
+    input.hourlyRate != null &&
+    !(Number.isFinite(input.hourlyRate) && input.hourlyRate >= 0 && input.hourlyRate <= 1_000)
+  ) {
+    return 'The machine rate must be between 0 and 1,000 per hour.'
+  }
   return null
+}
+
+/** The rate columns, only for the fields the caller sent: undefined leaves them alone. */
+function rates(input: PrintHostInput) {
+  return {
+    ...(input.watts !== undefined && {
+      watts: input.watts == null ? null : Math.round(input.watts),
+    }),
+    // numeric(10,2) comes and goes as a string, to keep the cents exact.
+    ...(input.hourlyRate !== undefined && {
+      hourlyRate: input.hourlyRate == null ? null : input.hourlyRate.toFixed(2),
+    }),
+  }
 }
 
 export async function createPrintHost(input: PrintHostInput): Promise<Result> {
@@ -57,6 +88,7 @@ export async function createPrintHost(input: PrintHostInput): Promise<Result> {
         endpoint: input.endpoint.trim().replace(/\/+$/, ''),
         // Encrypted at rest: a database dump should not hand over every printer.
         credentials: input.apiKey ? encryptSecret(input.apiKey) : null,
+        ...rates(input),
       })
       .returning({ id: schema.printHosts.id })
 
@@ -87,6 +119,7 @@ export async function updatePrintHost(id: string, input: PrintHostInput): Promis
       name: input.name.trim(),
       protocol: input.protocol,
       endpoint: input.endpoint.trim().replace(/\/+$/, ''),
+      ...rates(input),
       updatedAt: new Date(),
     }
 
@@ -114,6 +147,8 @@ export async function updatePrintHost(id: string, input: PrintHostInput): Promis
         protocol: input.protocol,
         // Whether the key changed, never the key.
         apiKeyChanged: input.apiKey !== undefined,
+        watts: input.watts,
+        hourlyRate: input.hourlyRate,
       },
     )
 

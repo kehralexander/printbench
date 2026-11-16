@@ -61,6 +61,8 @@ describe('Spoolman client', () => {
           colorHex: '#2d3f6f',
           remainingG: 894.35,
           initialG: 1000,
+          price: null,
+          costPerGram: null,
           location: 'Kobra X',
           comment: null,
           archived: false,
@@ -68,6 +70,19 @@ describe('Spoolman client', () => {
         },
       ],
     })
+  })
+
+  it("reads the spool's price, else its filament's, as a cost per gram", async () => {
+    const result = await listSpoolmanSpools({
+      fetch: respond([
+        { ...SPOOL, id: 1, price: 25, filament: { ...SPOOL.filament, price: 20 } },
+        { ...SPOOL, id: 2, initial_weight: 500, filament: { ...SPOOL.filament, price: 20 } },
+      ]),
+    })
+    expect(result.ok && result.spools.map((s) => [s.price, s.costPerGram])).toEqual([
+      [25, 0.025],
+      [20, 0.04],
+    ])
   })
 
   it('drops the alpha channel and falls back to multi-colour hexes', async () => {

@@ -5,7 +5,12 @@ import { ClipboardList } from 'lucide-react'
 import {
   can,
   canSendToPrinter,
+  describeFilaments,
   formatEstimate,
+  getSettings,
+  heldForRequester,
+  listCustomers,
+  quoteExpired,
   listRequests,
   loadNextHints,
   loadedFilament,
@@ -16,6 +21,7 @@ import {
   spoolmanSpoolLink,
   queueStats,
   requesterSuggestions,
+  type PrintRequest,
   type PrintRequestStatus,
 } from '@pb/core'
 import { getSessionUser } from '@pb/auth'
@@ -33,7 +39,14 @@ import { pickSort } from '@/lib/sort'
 import { AddRequests } from './add-requests'
 import { QueueList } from './queue-list'
 import { ResetOrder } from './reset-order'
-import type { NextHint, QueueRow, SendTarget, SpoolBadge, SpoolShortfall } from './request-row'
+import type {
+  NextHint,
+  QueueBilling,
+  QueueRow,
+  SendTarget,
+  SpoolBadge,
+  SpoolShortfall,
+} from './request-row'
 import { QUEUE_SORTS } from './sort'
 
 export const dynamic = 'force-dynamic'
@@ -66,13 +79,33 @@ export default async function QueuePage({
   const manual = sort === 'manual'
 
   const db = getDb()
-  const [requests, stats, requesters, filaments, printers] = await Promise.all([
+  const [requests, stats, requesters, filaments, printers, { pricing }] = await Promise.all([
     listRequests(db, { status: filter.status, limit: 200, sort }),
     queueStats(db),
     requesterSuggestions(db),
     filamentOptions(db),
     printerSnapshots(db),
+    getSettings(db),
   ])
+  // Prices are for whoever does the charging; a viewer may be the one charged.
+  const canBill = pricing.enabled && can(policyUser, 'billing:manage')
+  const billing: QueueBilling | null = canBill
+    ? {
+        currency: pricing.currency,
+        tiers: pricing.tiers.map((tier) => ({ key: tier.key, label: tier.label })),
+        defaultTier: pricing.defaultTier,
+        customers: (await listCustomers(db)).map((customer) => ({
+          id: customer.id,
+          name: customer.name,
+        })),
+      }
+    : null
+  /** Waiting on its requester: a quote not accepted, a deposit not paid. */
+  const heldFor = (request: PrintRequest) =>
+    heldForRequester(
+      { priceStatus: request.priceStatus, quotedPrice: request.quotedPrice, paid: request.paid },
+      pricing,
+    )
   // The look-ahead needs the open queue, in queue order, whatever the view.
   const open =
     filter.key === 'open' && manual
@@ -113,7 +146,14 @@ export default async function QueuePage({
     .map((printer) => ({ id: printer.id, name: printer.name, slots: printer.status!.slots ?? [] }))
   const hints = loadNextHints(
     idle,
-    open.filter((request) => request.status === 'requested'),
+    open
+      .filter((request) => request.status === 'requested')
+      .map((request) => ({
+        id: request.id,
+        title: request.title,
+        filaments: request.filaments,
+        held: heldFor(request) != null,
+      })),
   )
   const nextOn = new Map<string, NextHint[]>()
   for (const hint of hints) {
@@ -130,8 +170,7 @@ export default async function QueuePage({
           id: request.id,
           title: request.title,
           status: request.status === 'printing' ? 'printing' : 'requested',
-          spoolmanSpoolId: request.spoolmanSpoolId,
-          filamentG: request.filamentG,
+          filaments: request.filaments,
           left: Math.max(1, request.quantity - request.printsDone),
           progress: request.live?.progress ?? null,
         })),
@@ -166,21 +205,35 @@ export default async function QueuePage({
     quantity: request.quantity,
     priority: request.priority,
     status: request.status,
-    material: request.material,
-    colorHex: request.colorHex,
-    colorName: request.colorName,
+    filaments: request.filaments.map((filament) => ({
+      ...filament,
+      spool:
+        filament.spoolmanSpoolId != null ? (spools.get(filament.spoolmanSpoolId) ?? null) : null,
+    })),
     estimatedMin: request.estimatedMin,
     startedAt: request.startedAt?.toISOString() ?? null,
-    spoolmanSpoolId: request.spoolmanSpoolId,
-    spool: request.spoolmanSpoolId != null ? (spools.get(request.spoolmanSpoolId) ?? null) : null,
     filamentG: request.filamentG,
     printsDone: request.printsDone,
     live: request.live,
     liveDoneAt: request.live?.remainingMin != null ? finishTime(request.live.remainingMin) : null,
-    loaded:
-      request.status === 'done' || request.status === 'cancelled'
-        ? null
-        : loadedFilament(request, printerSlots),
+    ...loadedFor(request),
+    held: request.status === 'requested' ? heldFor(request) : null,
+    customerId: request.customerId,
+    customerName: request.customerName,
+    pricingTier: request.pricingTier,
+    price:
+      canBill && request.priceStatus !== 'none'
+        ? {
+            status: request.priceStatus,
+            quoted: request.quotedPrice,
+            quotedCost: request.quotedCost,
+            paid: request.paid,
+            needsRequote: request.needsRequote,
+            expired: quoteExpired(request),
+            invoiceId: request.invoiceId,
+            invoiceNumber: request.invoiceNumber,
+          }
+        : null,
     sendable:
       request.modelFileId != null &&
       request.filename != null &&
@@ -199,6 +252,18 @@ export default async function QueuePage({
     filename: request.filename,
     mine: request.createdBy === user.id,
   }))
+
+  /** Whether its filaments are in a printer, and the missing ones by name. */
+  function loadedFor(request: PrintRequest): Pick<QueueRow, 'loaded' | 'missing'> {
+    if (request.status === 'done' || request.status === 'cancelled') {
+      return { loaded: null, missing: null }
+    }
+    const loaded = loadedFilament(request.filaments, printerSlots)
+    return {
+      loaded,
+      missing: loaded && !loaded.loaded ? describeFilaments(loaded.missing) : null,
+    }
+  }
 
   // Idle printers whose next print no queue row already announces: nothing
   // loaded matches, or the most urgent request needs a different filament.
@@ -287,6 +352,7 @@ export default async function QueuePage({
             rows={rows}
             canRun={canRun}
             filaments={filaments}
+            billing={billing}
             sendTargets={sendTargets}
             sortable={canRun && manual && filter.key === 'open' && rows.length > 1}
           />

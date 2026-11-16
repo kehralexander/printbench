@@ -69,3 +69,8 @@ export * from './import/makerworld-auth-service'
 export * from './services/filament-service'
 
 export * from './services/filament-backup'
+
+export * from './slicer/gcode-tools'
+export * from './services/pricing'
+export * from './services/billing-service'
+export * from './services/pdf'

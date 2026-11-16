@@ -11,15 +11,16 @@ import { Select } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import type { FilamentOption } from '@/lib/filament-options'
-import { addModelToQueue, estimateFor } from '../../queue/actions'
+import { addModelToQueue, estimateFor, filamentsForFile } from '../../queue/actions'
 import {
   EstimateInput,
-  MaterialPicker,
-  NO_MATERIAL,
+  FilamentRows,
   estimateText,
   estimateValue,
-  materialInput,
+  filamentValue,
+  filamentsInput,
   suggestionHint,
+  withFileTools,
 } from '../../queue/request-fields'
 
 /**
@@ -60,8 +61,10 @@ export function QueueButton({
   const [requestedBy, setRequestedBy] = useState('')
   const [quantity, setQuantity] = useState('1')
   const [fileId, setFileId] = useState(defaultFile)
-  const [material, setMaterial] = useState(NO_MATERIAL)
+  const [filamentRows, setFilamentRows] = useState(() => [filamentValue()])
   const [pickerKey, setPickerKey] = useState(0)
+  /** Which file's tools the rows show, so a slow answer for an earlier choice is dropped. */
+  const toolsFor = useRef<string | null>(null)
   const [notes, setNotes] = useState('')
   const [estimate, setEstimate] = useState('')
   const [hint, setHint] = useState<string | null>(null)
@@ -80,11 +83,20 @@ export function QueueButton({
     setHint(suggestion ? suggestionHint(suggestion.source) : null)
   }
 
+  /** A multi-colour plate gets a row per colour, filled in from the file. */
+  async function loadTools(nextFileId: string) {
+    toolsFor.current = nextFileId
+    const { tools } = nextFileId ? await filamentsForFile(modelId, nextFileId) : { tools: null }
+    if (toolsFor.current !== nextFileId) return
+    setFilamentRows((rows) => withFileTools(rows, tools))
+    setPickerKey((key) => key + 1)
+  }
+
   function reset() {
     setRequestedBy('')
     setQuantity('1')
     setFileId(defaultFile)
-    setMaterial(NO_MATERIAL)
+    setFilamentRows([filamentValue()])
     setPickerKey((key) => key + 1)
     setNotes('')
     setEstimate('')
@@ -110,7 +122,7 @@ export function QueueButton({
         requestedBy,
         notes: notes.trim() || null,
         modelFileId: fileId || null,
-        ...materialInput(material),
+        filaments: filamentsInput(filamentRows),
         estimatedMin: minutes,
       })
 
@@ -131,6 +143,7 @@ export function QueueButton({
         if (next) {
           reset()
           void suggest(defaultFile, '')
+          if (defaultFile) void loadTools(defaultFile)
         }
         setOpen(next)
       }}
@@ -198,6 +211,7 @@ export function QueueButton({
                 onChange={(event) => {
                   setFileId(event.target.value)
                   void suggest(event.target.value, estimate)
+                  void loadTools(event.target.value)
                 }}
               >
                 <option value="">Not chosen yet</option>
@@ -223,10 +237,10 @@ export function QueueButton({
             </Field>
           )}
 
-          <MaterialPicker
+          <FilamentRows
             key={pickerKey}
-            value={material}
-            onChange={setMaterial}
+            rows={filamentRows}
+            onChange={setFilamentRows}
             options={filaments}
           />
 

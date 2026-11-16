@@ -97,3 +97,22 @@ export const printRequestStatus = pgEnum('print_request_status', [
 
 /** Declaration order is the sort order, so `ORDER BY priority DESC` is urgent-first. */
 export const printRequestPriority = pgEnum('print_request_priority', ['low', 'normal', 'high'])
+
+/**
+ * Where a request's price stands, apart from where its printing stands: a
+ * print can be finished and unpaid, or paid for and not started.
+ *
+ *   none → quoted → accepted | declined → invoiced → paid
+ *                                       ↘ waived
+ */
+export const priceStatus = pgEnum('price_status', [
+  'none',
+  'quoted',
+  'accepted',
+  'declined',
+  'invoiced',
+  'paid',
+  'waived',
+])
+
+export const paymentMethod = pgEnum('payment_method', ['cash', 'transfer', 'paypal', 'other'])

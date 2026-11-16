@@ -1,5 +1,11 @@
 import { sql } from 'drizzle-orm'
 import type { Database } from '@pb/db'
+import {
+  DEFAULT_PRICING,
+  PricingValidationError,
+  validatePricing,
+  type PricingSettings,
+} from '../services/pricing'
 
 /**
  * Site-wide settings.
@@ -42,6 +48,8 @@ export interface Settings {
    * identity provider cannot lock everyone out.
    */
   hidePasswordLogin: boolean
+  /** Costs, rates, tiers and invoice details for charging for prints. Off by default. */
+  pricing: PricingSettings
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -55,6 +63,7 @@ export const DEFAULT_SETTINGS: Settings = {
   auditRetentionDays: 365,
   logRetentionDays: 14,
   hidePasswordLogin: false,
+  pricing: DEFAULT_PRICING,
 }
 
 export class SettingsValidationError extends Error {
@@ -130,6 +139,17 @@ export function validate<K extends keyof Settings>(key: K, value: unknown): Sett
         throw new SettingsValidationError('The viewer limit must be under 4 GB.')
       }
       return Math.round(bytes) as Settings[K]
+    }
+
+    case 'pricing': {
+      try {
+        return validatePricing(value) as Settings[K]
+      } catch (error) {
+        if (error instanceof PricingValidationError) {
+          throw new SettingsValidationError(error.message)
+        }
+        throw error
+      }
     }
 
     default:

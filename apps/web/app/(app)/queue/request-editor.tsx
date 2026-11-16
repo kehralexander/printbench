@@ -14,20 +14,23 @@ import type { FilamentOption } from '@/lib/filament-options'
 import {
   editRequest,
   estimateFor,
+  filamentsForFile,
   printableFiles,
   setRequestModel,
   type PrintableFile,
 } from './actions'
 import {
   EstimateInput,
-  MaterialPicker,
+  FilamentRows,
   estimateText,
   estimateValue,
-  materialFrom,
-  materialInput,
+  filamentsFrom,
+  filamentsInput,
   suggestionHint,
+  withFileTools,
 } from './request-fields'
-import type { QueueRow } from './request-row'
+import { RequestPricingPanel } from './request-pricing'
+import type { QueueBilling, QueueRow } from './request-row'
 
 /**
  * Everything about a request after it was raised: the wording, how many, how
@@ -40,10 +43,13 @@ import type { QueueRow } from './request-row'
 export function RequestEditor({
   request,
   filaments,
+  billing,
   pending: rowPending,
 }: {
   request: QueueRow
   filaments: FilamentOption[]
+  /** Set when the viewer does the charging: adds who pays, the tier and the price. */
+  billing: QueueBilling | null
   pending: boolean
 }) {
   const router = useRouter()
@@ -54,7 +60,11 @@ export function RequestEditor({
   const [dueAt, setDueAt] = useState(request.dueAt?.slice(0, 10) ?? '')
   const [requestedBy, setRequestedBy] = useState(request.requestedBy ?? '')
   const [notes, setNotes] = useState(request.notes ?? '')
-  const [material, setMaterial] = useState(() => materialFrom(request))
+  const [filamentRows, setFilamentRows] = useState(() => filamentsFrom(request.filaments))
+  /** Remounts the pickers when a file replaces the rows. */
+  const [rowsKey, setRowsKey] = useState(0)
+  const [customerId, setCustomerId] = useState(request.customerId ?? '')
+  const [tier, setTier] = useState(request.pricingTier ?? '')
   const [fileId, setFileId] = useState(request.modelFileId ?? '')
   const [files, setFiles] = useState<PrintableFile[] | null>(null)
   const [estimate, setEstimate] = useState(estimateText(request.estimatedMin))
@@ -63,6 +73,20 @@ export function RequestEditor({
   const [saving, startSaving] = useTransition()
   /** The last suggestion put in the field, so a later one may replace it. */
   const suggested = useRef<string | null>(null)
+  /** Which file's tools the rows show, so a slow answer for an earlier choice is dropped. */
+  const toolsFor = useRef<string | null>(null)
+
+  /** A multi-colour plate brings a row per colour; a mesh turns them back into wishes. */
+  async function loadTools(nextFileId: string) {
+    if (!request.modelId) return
+    toolsFor.current = nextFileId
+    const { tools } = nextFileId
+      ? await filamentsForFile(request.modelId, nextFileId)
+      : { tools: null }
+    if (toolsFor.current !== nextFileId) return
+    setFilamentRows((rows) => withFileTools(rows, tools))
+    setRowsKey((key) => key + 1)
+  }
 
   function reset() {
     setTitle(request.title)
@@ -71,7 +95,10 @@ export function RequestEditor({
     setDueAt(request.dueAt?.slice(0, 10) ?? '')
     setRequestedBy(request.requestedBy ?? '')
     setNotes(request.notes ?? '')
-    setMaterial(materialFrom(request))
+    setFilamentRows(filamentsFrom(request.filaments))
+    setRowsKey((key) => key + 1)
+    setCustomerId(request.customerId ?? '')
+    setTier(request.pricingTier ?? '')
     setFileId(request.modelFileId ?? '')
     setEstimate(estimateText(request.estimatedMin))
     setHint(null)
@@ -135,8 +162,9 @@ export function RequestEditor({
         dueAt: dueAt ? new Date(dueAt) : null,
         requestedBy: requestedBy.trim() || null,
         notes: notes.trim() || null,
-        ...materialInput(material),
+        filaments: filamentsInput(filamentRows),
         estimatedMin: minutes,
+        ...(billing ? { customerId: customerId || null, pricingTier: tier || null } : {}),
       })
       if (!result.ok) {
         setError(result.error)
@@ -225,7 +253,12 @@ export function RequestEditor({
               </Field>
             </div>
 
-            <MaterialPicker value={material} onChange={setMaterial} options={filaments} />
+            <FilamentRows
+              key={rowsKey}
+              rows={filamentRows}
+              onChange={setFilamentRows}
+              options={filaments}
+            />
 
             {request.modelId && (
               <Field
@@ -239,6 +272,7 @@ export function RequestEditor({
                   onChange={(event) => {
                     setFileId(event.target.value)
                     void suggest(event.target.value, estimate)
+                    void loadTools(event.target.value)
                   }}
                 >
                   <option value="">Not chosen yet</option>
@@ -292,6 +326,44 @@ export function RequestEditor({
               />
             </Field>
 
+            {billing && (
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Field
+                  label="Who pays"
+                  htmlFor={`edit-customer-${request.id}`}
+                  hint={
+                    billing.customers.length === 0 ? 'Add customers on the billing page' : undefined
+                  }
+                >
+                  <Select
+                    value={customerId}
+                    onChange={(event) => setCustomerId(event.target.value)}
+                  >
+                    <option value="">{request.requestedBy || 'Nobody named'}</option>
+                    {billing.customers.map((customer) => (
+                      <option key={customer.id} value={customer.id}>
+                        {customer.name}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+                <Field label="Pricing tier" htmlFor={`edit-tier-${request.id}`}>
+                  <Select value={tier} onChange={(event) => setTier(event.target.value)}>
+                    <option value="">
+                      The customer&apos;s, else{' '}
+                      {billing.tiers.find((option) => option.key === billing.defaultTier)?.label ??
+                        'the default'}
+                    </option>
+                    {billing.tiers.map((option) => (
+                      <option key={option.key} value={option.key}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+              </div>
+            )}
+
             {error && <p className="text-sm text-[var(--color-danger)]">{error}</p>}
 
             <div className="flex justify-end gap-2">
@@ -305,6 +377,10 @@ export function RequestEditor({
                 Save
               </Button>
             </div>
+
+            {/* After Save, since it does not wait for it: saved changes the
+                price depends on show up here as "quote again". */}
+            {billing && <RequestPricingPanel request={request} billing={billing} />}
           </div>
         </Dialog.Content>
       </Dialog.Portal>

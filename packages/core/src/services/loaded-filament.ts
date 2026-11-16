@@ -14,10 +14,25 @@ export interface PrinterSlots {
   slots: FilamentSlot[]
 }
 
+/** One wanted filament and the slot it was found in. */
+export interface LoadedMatch {
+  filament: WantedFilament
+  slot: FilamentSlot
+}
+
 export type LoadedVerdict =
-  | { loaded: true; printerName: string; slot: FilamentSlot }
+  | {
+      loaded: true
+      printerName: string
+      /** The first filament's slot, for the one-filament case. */
+      slot: FilamentSlot
+      /** Every filament asked for, with its slot. */
+      matches: LoadedMatch[]
+    }
   | {
       loaded: false
+      /** What is not in the printer that comes closest, to name in the warning. */
+      missing: WantedFilament[]
       /** What is loaded instead, to show next to the warning. */
       instead: FilamentSlot[]
     }
@@ -26,6 +41,8 @@ export interface WantedFilament {
   material: string | null
   colorHex: string | null
   spoolmanSpoolId: number | null
+  /** "Galaxy Black", for naming what is missing. */
+  colorName?: string | null
 }
 
 /**
@@ -35,31 +52,62 @@ export interface WantedFilament {
  */
 const SAME_COLOUR_DISTANCE = 80
 
-/** Null when there is nothing to compare: no printer reports slots, or nothing was asked for. */
+/** Whether a filament row asks for anything at all; an empty one is "any". */
+export function namesFilament(wanted: WantedFilament): boolean {
+  return wanted.spoolmanSpoolId != null || Boolean(wanted.material) || Boolean(wanted.colorHex)
+}
+
+/**
+ * Whether every filament a request asks for is loaded on one printer — a
+ * two-colour print needs both colours in the same machine, not one in each.
+ *
+ * Null when there is nothing to compare: no printer reports slots, or nothing
+ * was asked for. Otherwise the printer that has them all, or, when none does,
+ * the filaments missing from the printer that comes closest.
+ */
 export function loadedFilament(
-  wanted: WantedFilament,
+  wanted: WantedFilament | readonly WantedFilament[],
   printers: PrinterSlots[],
 ): LoadedVerdict | null {
   const withSlots = printers.filter((printer) => printer.slots.length > 0)
   if (withSlots.length === 0) return null
-  if (wanted.spoolmanSpoolId == null && !wanted.material && !wanted.colorHex) return null
+  const asked = (Array.isArray(wanted) ? wanted : [wanted as WantedFilament]).filter(namesFilament)
+  if (asked.length === 0) return null
 
-  const loaded = withSlots.flatMap((printer) =>
-    printer.slots.filter((slot) => slot.loaded).map((slot) => ({ printer, slot })),
-  )
-
-  if (wanted.spoolmanSpoolId != null) {
-    const exact = loaded.find(({ slot }) => slot.spoolmanSpoolId === wanted.spoolmanSpoolId)
-    if (exact) return { loaded: true, printerName: exact.printer.printerName, slot: exact.slot }
-    // The printer tracks spools and that one is not among them: no need to guess.
-    if (loaded.some(({ slot }) => slot.spoolmanSpoolId != null)) {
-      return { loaded: false, instead: loaded.map(({ slot }) => slot) }
+  let best: { printer: PrinterSlots; matches: LoadedMatch[]; missing: WantedFilament[] } | null =
+    null
+  for (const printer of withSlots) {
+    const loaded = printer.slots.filter((slot) => slot.loaded)
+    const matches: LoadedMatch[] = []
+    const missing: WantedFilament[] = []
+    for (const filament of asked) {
+      const slot = findSlot(filament, loaded)
+      if (slot) matches.push({ filament, slot })
+      else missing.push(filament)
     }
+    if (missing.length === 0) {
+      return { loaded: true, printerName: printer.printerName, slot: matches[0]!.slot, matches }
+    }
+    if (!best || missing.length < best.missing.length) best = { printer, matches, missing }
   }
 
-  const match = loaded.find(({ slot }) => sameFilament(wanted, slot))
-  if (match) return { loaded: true, printerName: match.printer.printerName, slot: match.slot }
-  return { loaded: false, instead: loaded.map(({ slot }) => slot) }
+  const instead = withSlots.flatMap((printer) => printer.slots.filter((slot) => slot.loaded))
+  return { loaded: false, missing: best!.missing, instead }
+}
+
+/**
+ * A Spoolman spool is the exact question — is that spool in a slot — and is
+ * answered that way whenever the printer reports spool ids. Otherwise it is a
+ * looser one: the same kind of material, in a colour close enough.
+ */
+function findSlot(wanted: WantedFilament, loaded: FilamentSlot[]): FilamentSlot | null {
+  if (wanted.spoolmanSpoolId != null) {
+    const exact = loaded.find((slot) => slot.spoolmanSpoolId === wanted.spoolmanSpoolId)
+    if (exact) return exact
+    // The printer tracks spools and that one is not among them: no need to guess.
+    if (loaded.some((slot) => slot.spoolmanSpoolId != null)) return null
+  }
+  return loaded.find((slot) => sameFilament(wanted, slot)) ?? null
 }
 
 function sameFilament(wanted: WantedFilament, slot: FilamentSlot): boolean {

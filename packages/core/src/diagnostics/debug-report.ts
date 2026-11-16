@@ -92,7 +92,8 @@ export interface DebugReport {
   derived: { thumbnails: Record<string, number>; analysis: Record<string, number> }
   queues: DebugQueue[] | null
   problems: Record<string, number>
-  settings: Omit<Settings, 'siteName'> | null
+  /** Pricing as a one-line summary: it holds the seller's name and address. */
+  settings: (Omit<Settings, 'siteName' | 'pricing'> & { pricing: string }) | null
   recentErrors: {
     at: string
     level: string
@@ -401,10 +402,15 @@ export async function collectDebugReport(
     section<DebugReport['settings']>(
       'settings',
       async () => {
-        // The site name is the one setting that identifies the instance.
-        const rest: Partial<Settings> = await getSettings(db)
-        delete rest.siteName
-        return rest as Omit<Settings, 'siteName'>
+        // The site name is the one setting that identifies the instance, and
+        // the pricing setting carries the seller's name and address.
+        const { siteName: _name, pricing, ...rest } = await getSettings(db)
+        return {
+          ...rest,
+          pricing: pricing.enabled
+            ? `on · ${pricing.currency} · ${pricing.tiers.length} tiers · tax ${pricing.taxMode}`
+            : 'off',
+        }
       },
       null,
     ),

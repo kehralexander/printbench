@@ -1,5 +1,6 @@
 import type { StorageAdapter } from '../storage/types'
 import { parseGcodeMetadata, type GcodeMetadata } from '../slicer/gcode-metadata'
+import { scanUsedToolsStream, type GcodeTool } from '../slicer/gcode-tools'
 import {
   SLICER_THUMBNAIL_WINDOW_BYTES,
   extractSlicerThumbnails,
@@ -99,6 +100,37 @@ export async function readGcodeMetadata(
      * The storage layer logs its own failures.
      */
     return {}
+  }
+}
+
+/**
+ * The settings plus every filament the file prints with, with which tools
+ * the body really changes to.
+ *
+ * Finding those means reading the whole file, so this is for when a file is
+ * linked to something — once — and never for a page render. A file with a
+ * single tool is not scanned: there is nothing to tell apart.
+ */
+export async function readGcodeWithTools(
+  storage: StorageAdapter,
+  relativePath: string,
+  size: number | null,
+): Promise<GcodeMetadata & { filaments: GcodeTool[] }> {
+  const metadata = await readGcodeMetadata(storage, relativePath, size)
+  const listed = metadata.filaments ?? []
+  if (listed.length <= 1) return { ...metadata, filaments: listed }
+
+  try {
+    const used = await scanUsedToolsStream(await storage.createReadStream(relativePath))
+    if (used.size === 0) return { ...metadata, filaments: listed }
+    // Same rule as readGcodeTools: tool changes, once seen, settle it.
+    return {
+      ...metadata,
+      filaments: listed.map((tool) => ({ ...tool, used: used.has(tool.tool) })),
+    }
+  } catch {
+    // The header's answer is still an answer.
+    return { ...metadata, filaments: listed }
   }
 }
 

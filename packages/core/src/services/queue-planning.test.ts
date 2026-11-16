@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { FilamentSlot } from './printer-status'
 import {
   describeFilament,
+  describeFilaments,
   loadNextHints,
   spoolForecast,
   type ForecastRequest,
@@ -23,13 +24,18 @@ const kobra = {
   ],
 }
 
-const request = (id: string, extra: Partial<Parameters<typeof loadNextHints>[1][number]> = {}) => ({
+type Wish = { material?: string | null; colorHex?: string | null; spoolmanSpoolId?: number | null }
+
+const request = (id: string, wish: Wish = {}, more: Wish[] = [], held = false) => ({
   id,
   title: id,
-  material: null,
-  colorHex: null,
-  spoolmanSpoolId: null,
-  ...extra,
+  held,
+  filaments: [wish, ...more].map((filament) => ({
+    material: null,
+    colorHex: null,
+    spoolmanSpoolId: null,
+    ...filament,
+  })),
 })
 
 describe('what an idle printer should print next', () => {
@@ -77,14 +83,40 @@ describe('what an idle printer should print next', () => {
       'its filament',
     )
   })
+
+  it('is ready only when every filament of a request is loaded, and names the missing one', () => {
+    const [hint] = loadNextHints(
+      [kobra],
+      [
+        request('two-colour', { spoolmanSpoolId: 12 }, [{ material: 'PETG', colorHex: '#ff0000' }]),
+        request('white', { spoolmanSpoolId: 12 }),
+      ],
+    )
+    expect(hint?.ready?.request.id).toBe('white')
+    expect(hint?.swap).toMatchObject({ request: { id: 'two-colour' }, filament: 'PETG #ff0000' })
+  })
+
+  it('passes over requests held for their requester', () => {
+    const [hint] = loadNextHints([kobra], [request('quoted', {}, [], true), request('accepted')])
+    expect(hint).toMatchObject({ ready: { request: { id: 'accepted' } }, swap: null })
+  })
+
+  it('names several missing filaments together', () => {
+    expect(
+      describeFilaments([
+        { material: 'PLA', colorHex: '#ff0000', spoolmanSpoolId: null },
+        { material: null, colorHex: null, spoolmanSpoolId: null },
+        { material: 'PETG', colorHex: null, spoolmanSpoolId: 4 },
+      ]),
+    ).toBe('PLA #ff0000 and spool #4 · PETG')
+  })
 })
 
 const queued = (id: string, extra: Partial<ForecastRequest> = {}): ForecastRequest => ({
   id,
   title: id,
   status: 'requested',
-  spoolmanSpoolId: 17,
-  filamentG: 100,
+  filaments: [{ spoolmanSpoolId: 17, grams: 100 }],
   left: 1,
   progress: null,
   ...extra,
@@ -118,12 +150,35 @@ describe('spool burn-down', () => {
     expect(
       spoolForecast(
         [
-          queued('a', { filamentG: null }),
-          queued('b', { spoolmanSpoolId: null }),
-          queued('c', { spoolmanSpoolId: 99 }),
+          queued('a', { filaments: [{ spoolmanSpoolId: 17, grams: null }] }),
+          queued('b', { filaments: [{ spoolmanSpoolId: null, grams: 100 }] }),
+          queued('c', { filaments: [{ spoolmanSpoolId: 99, grams: 100 }] }),
         ],
         new Map([[17, 10]]),
       ),
     ).toEqual([])
+  })
+
+  it('sums the grams of every filament per spool', () => {
+    const forecast = spoolForecast(
+      [
+        queued('two-colour', {
+          left: 2,
+          filaments: [
+            { spoolmanSpoolId: 17, grams: 30 },
+            { spoolmanSpoolId: 21, grams: 5 },
+            { spoolmanSpoolId: 17, grams: 10 },
+          ],
+        }),
+      ],
+      new Map([
+        [17, 1000],
+        [21, 8],
+      ]),
+    )
+    expect(forecast).toEqual([
+      expect.objectContaining({ spoolId: 17, neededG: 80, prints: 2, runsOutAfter: null }),
+      expect.objectContaining({ spoolId: 21, neededG: 10, prints: 2, runsOutAfter: 1 }),
+    ])
   })
 })

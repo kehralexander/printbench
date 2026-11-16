@@ -7,6 +7,8 @@ import {
   can,
   countUnmatchedJobs,
   listRequests,
+  getSettings,
+  heldForRequester,
   loadNextHints,
   matchLibraryFile,
   spoolmanSpoolLink,
@@ -106,9 +108,10 @@ export default async function PrintersPage({
   const doneAt = readings.map(({ status, readAt }) => printDoneAt(status, readAt))
 
   // For idle printers, what in the queue they could start next.
-  const queue = can(user, 'request:create')
-    ? await listRequests(db, { status: ['requested'], limit: 200 })
-    : []
+  const [queue, { pricing }] = await Promise.all([
+    can(user, 'request:create') ? listRequests(db, { status: ['requested'], limit: 200 }) : [],
+    getSettings(db),
+  ])
   const hints = new Map(
     loadNextHints(
       hosts
@@ -117,7 +120,11 @@ export default async function PrintersPage({
           ({ status }) => !status.busy && status.state !== 'offline' && status.state !== 'error',
         )
         .map(({ host, status }) => ({ id: host.id, name: host.name, slots: status.slots ?? [] })),
-      queue,
+      // Waiting on the requester — an unaccepted quote, an unpaid deposit — is not next up.
+      queue.map((request) => ({
+        ...request,
+        held: heldForRequester(request, pricing) != null,
+      })),
     ).map((hint) => [hint.printerId, hint]),
   )
 

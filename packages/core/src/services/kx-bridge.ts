@@ -1,3 +1,4 @@
+import { readGcodeTools, scanUsedTools } from '../slicer/gcode-tools'
 import { colourDistance, materialFamily, type WantedFilament } from './loaded-filament'
 import {
   UPLOAD_TIMEOUT_MS,
@@ -63,62 +64,22 @@ const SAME_COLOUR_DISTANCE = 80
 const HEADER_BYTES = 131_072
 
 /**
- * The filaments a G-code names, read the way KX-Bridge reads them
- * (gcode_meta._extract_filament_info), so tool numbers line up with the ones
- * it maps: colours from `filament_colour`, materials from `filament_type`,
- * and in use when the body has a `T<n>` for it — or, failing that, the
- * header's `; filament: 1,3` list.
+ * The filaments a G-code names, as the slicer module reads them for everyone
+ * (../slicer/gcode-tools), with the bridge's own defaults for a tool the file
+ * says nothing about: white PLA.
  */
 export function gcodePaints(data: Uint8Array): GcodePaint[] {
   const decoder = new TextDecoder('utf-8', { fatal: false })
   const head = decoder.decode(data.subarray(0, HEADER_BYTES))
   const tail = data.length > HEADER_BYTES ? decoder.decode(data.subarray(-HEADER_BYTES)) : ''
-
-  let colours: string[] = []
-  let materials: string[] = []
-  let countHint = 0
-  let toolOrder: number[] = []
-  for (const line of `${head}\n${tail}`.split(/\r?\n/)) {
-    const value = (separator: string) => line.slice(line.indexOf(separator) + 1).trim()
-    if (/^\s*;\s*filament_colour\s*=/.test(line)) {
-      colours = list(value('='), /;/).map((colour) => colour.replace(/^#/, ''))
-    } else if (/^\s*;\s*filament_multi_colour\s*=/.test(line) && colours.length === 0) {
-      colours = list(value('='), /;/).map((colour) => colour.replace(/^#/, ''))
-    } else if (/^\s*;\s*filament_type\s*=/.test(line)) {
-      materials = list(value('='), /[;,]/)
-      countHint = Math.max(countHint, materials.length)
-    } else if (/^\s*;\s*filament_(density|diameter)\s*:/.test(line)) {
-      countHint = Math.max(countHint, list(value(':'), /[;,]/).length)
-    } else if (/^\s*;\s*filament\s*:/.test(line)) {
-      const order = list(value(':'), /,/).map(Number).filter(Number.isInteger)
-      if (order.length > 0) toolOrder = order
-    }
-  }
-
-  let total = Math.max(colours.length, materials.length, countHint)
-  if (toolOrder.length > 0) total = Math.max(total, ...toolOrder)
-  if (total <= 0) return []
-
   // Tool changes in the body: the whole file, as the bridge scans it.
-  const used = new Set<number>()
-  const body = decoder.decode(data)
-  for (const match of body.matchAll(/^[ \t]*T(\d+)\b/gm)) used.add(Number(match[1]))
-  // Orca and Prusa number the header list from 1.
-  const fromHeader = new Set(toolOrder.map((n) => Math.max(0, n - 1)))
-
-  return Array.from({ length: total }, (_, paint) => ({
-    paint,
-    colorHex: `#${(colours[paint] || 'FFFFFF').slice(0, 6).toLowerCase()}`,
-    material: materials[paint] ?? 'PLA',
-    used: used.size > 0 ? used.has(paint) : fromHeader.size > 0 ? fromHeader.has(paint) : true,
+  const used = scanUsedTools(decoder.decode(data))
+  return readGcodeTools(head, tail, used).map((tool) => ({
+    paint: tool.tool,
+    colorHex: tool.colorHex ?? '#ffffff',
+    material: tool.material ?? 'PLA',
+    used: tool.used,
   }))
-}
-
-function list(value: string, separator: RegExp): string[] {
-  return value
-    .split(separator)
-    .map((part) => part.trim().replace(/^["']+|["']+$/g, ''))
-    .filter(Boolean)
 }
 
 /**
@@ -174,13 +135,20 @@ export async function readKxSlots(
     })
 }
 
+/** A request's filament for one tool; a null tool is a wish made before the file. */
+export interface ToolWish extends WantedFilament {
+  tool: number | null
+}
+
 /**
  * Which slot each tool the G-code uses should print from.
  *
- * With one tool and a queue request behind it, the request decides: its
- * Spoolman spool if that is loaded, else its material and colour. Otherwise
- * — the model page, or a print with several colours — each tool goes to the
- * slot closest to what it was sliced with.
+ * With a queue request behind it, each tool goes by the request's filament
+ * for that tool: its Spoolman spool if that is loaded, else its material and
+ * colour. A wish made before there was a file (no tool) applies when the file
+ * turns out to have one tool. A tool the request says nothing about — and
+ * every tool, from the model page — goes to the slot closest to what it was
+ * sliced with.
  *
  * A guess is sure when nothing else could be meant: one slot fits, or the
  * ones that do are the same filament. Several reds of one material are
@@ -189,19 +157,30 @@ export async function readKxSlots(
 export function planSlots(
   paints: GcodePaint[],
   slots: FilamentSlot[],
-  wanted: WantedFilament | null = null,
+  wanted: readonly ToolWish[] | WantedFilament | null = null,
 ): SlotPlan {
   const loaded = slots.filter((slot) => slot.loaded)
   const usedPaints = paints.filter((paint) => paint.used)
   // A G-code without the header says nothing; treat it as one tool.
   const toPlace = usedPaints.length > 0 ? usedPaints : [unknownPaint()]
+  const wishes: readonly ToolWish[] =
+    wanted == null
+      ? []
+      : Array.isArray(wanted)
+        ? wanted
+        : [{ ...(wanted as WantedFilament), tool: null }]
   const taken = new Set<number>()
 
   const placed = toPlace.map((paint) => {
     const free = loaded.filter((slot) => !taken.has(slot.index))
+    const wish =
+      wishes.find((candidate) => candidate.tool === paint.paint) ??
+      (toPlace.length === 1 && wishes.length === 1 && wishes[0]!.tool == null
+        ? wishes[0]
+        : undefined)
     let choice: { slot: number | null; sure: boolean }
-    if (toPlace.length === 1 && wanted && hasWish(wanted)) {
-      choice = forRequest(wanted, free, paint)
+    if (wish && hasWish(wish)) {
+      choice = forRequest(wish, free, paint)
     } else {
       const { slot, sure } = closest({ material: paint.material, colorHex: paint.colorHex }, free)
       choice = { slot, sure }

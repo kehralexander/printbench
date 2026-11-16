@@ -2,7 +2,7 @@ import Link from 'next/link'
 import { asc, desc, sql } from 'drizzle-orm'
 import { Activity } from 'lucide-react'
 import { getSessionUser } from '@pb/auth'
-import { can } from '@pb/core'
+import { can, getSettings } from '@pb/core'
 import { getDb, schema } from '@pb/db'
 import { PageHeader } from '@/components/shell/page-header'
 import { NotPermitted } from '@/components/shell/not-permitted'
@@ -49,9 +49,14 @@ export default async function PrintersPage({
       endpoint: schema.printHosts.endpoint,
       credentials: schema.printHosts.credentials,
       lastSeenOk: schema.printHosts.lastSeenOk,
+      watts: schema.printHosts.watts,
+      hourlyRate: schema.printHosts.hourlyRate,
     })
     .from(schema.printHosts)
     .orderBy(...order)
+
+  // Only for writing the machine rate in the instance's currency.
+  const { pricing } = await getSettings(getDb())
 
   return (
     <>
@@ -77,6 +82,7 @@ export default async function PrintersPage({
       )}
 
       <PrinterList
+        currency={pricing.currency}
         hosts={hosts.map((host) => ({
           id: host.id,
           name: host.name,
@@ -85,6 +91,8 @@ export default async function PrintersPage({
           // Only whether a key exists ever reaches the browser, never the key.
           hasApiKey: host.credentials != null,
           lastSeenOk: host.lastSeenOk?.toISOString() ?? null,
+          watts: host.watts,
+          hourlyRate: host.hourlyRate == null ? null : Number(host.hourlyRate),
         }))}
       />
     </>

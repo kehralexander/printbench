@@ -20,7 +20,9 @@ import {
   formatEstimate,
   type PrintRequestPriority,
   type PrintRequestStatus,
+  type RequestFilament,
 } from '@pb/core/requests'
+import { formatMoney, type PriceStatus } from '@pb/core/pricing'
 import type { FilamentSlot, LivePrint, LoadedVerdict } from '@pb/core'
 import { Badge } from '@/components/ui/badge'
 import { Swatch } from '@/components/ui/swatch'
@@ -76,6 +78,33 @@ export interface SpoolShortfall {
   of: number
 }
 
+/** One of the filaments a request prints in, with its Spoolman spool's state. */
+export interface QueueFilament extends RequestFilament {
+  /** Live state of its Spoolman spool; null when Spoolman is off, down, or lost it. */
+  spool: SpoolBadge | null
+}
+
+/** Where a request's price stands, for whoever does the charging. */
+export interface RowPrice {
+  status: PriceStatus
+  quoted: number | null
+  /** What it was expected to cost, when quoted. */
+  quotedCost: number | null
+  paid: number
+  needsRequote: boolean
+  expired: boolean
+  invoiceId: string | null
+  invoiceNumber: number | null
+}
+
+/** What the editor needs to charge for a request; null when the viewer does not charge. */
+export interface QueueBilling {
+  currency: string
+  tiers: { key: string; label: string }[]
+  defaultTier: string
+  customers: { id: string; name: string }[]
+}
+
 /** What an idle printer could start next, shown on the row it points at. */
 export interface NextHint {
   printerName: string
@@ -90,17 +119,13 @@ export interface QueueRow {
   quantity: number
   priority: PrintRequestPriority
   status: PrintRequestStatus
-  material: string | null
-  colorHex: string | null
-  colorName: string | null
+  /** Every filament it prints in, in tool order; empty for "any". */
+  filaments: QueueFilament[]
   /** Minutes for one print. */
   estimatedMin: number | null
   /** ISO; set while it is on the printer. */
   startedAt: string | null
-  spoolmanSpoolId: number | null
-  /** Live state of that spool; null when Spoolman is off, down, or lost it. */
-  spool: SpoolBadge | null
-  /** Grams for one print, from the chosen G-code. */
+  /** Grams for one print across every filament, from the chosen G-code. */
   filamentG: number | null
   /** Prints finished towards `quantity`. */
   printsDone: number
@@ -108,8 +133,17 @@ export interface QueueRow {
   live: LivePrint | null
   /** ISO; when the print on the printer should finish, from `live`. */
   liveDoneAt: string | null
-  /** Whether the asked-for filament is in a printer's slots; null when unknowable. */
+  /** Whether every asked-for filament is in one printer's slots; null when unknowable. */
   loaded: LoadedVerdict | null
+  /** The filaments not loaded, by name, when `loaded` says some are not. */
+  missing: string | null
+  /** Waiting on its requester rather than the printer. */
+  held: 'quote' | 'deposit' | null
+  customerId: string | null
+  customerName: string | null
+  pricingTier: string | null
+  /** Set only for whoever does the charging, once it has a price. */
+  price: RowPrice | null
   /** The chosen file is sliced output a printer accepts. */
   sendable: boolean
   /** The spool will not stretch to this one, given everything before it. */
@@ -148,12 +182,14 @@ export function RequestRow({
   request,
   canRun,
   filaments,
+  billing,
   sendTargets,
   drag,
 }: {
   request: QueueRow
   canRun: boolean
   filaments: FilamentOption[]
+  billing: QueueBilling | null
   /** Printers to offer Send & start for; empty when the user may not send. */
   sendTargets: SendTarget[]
   /** Set when the row can be dragged to a new place in the queue. */
@@ -192,7 +228,14 @@ export function RequestRow({
     })
   }
 
-  const look = [request.material, request.colorName].filter(Boolean).join(' · ')
+  const named = request.filaments.filter(
+    (filament) =>
+      filament.material || filament.colorName || filament.colorHex || filament.spoolmanSpoolId,
+  )
+  const look =
+    named.length > 1
+      ? `${named.length} colours`
+      : [named[0]?.material, named[0]?.colorName].filter(Boolean).join(' · ')
   // Prints still to do: the rest of the quantity once some are done.
   const left = Math.max(1, request.quantity - request.printsDone)
   const estimate =
@@ -203,12 +246,32 @@ export function RequestRow({
       : null
 
   const neededG = request.filamentG != null ? request.filamentG * left : null
-  // Only a warning while it still matters, and only with both numbers known.
-  const short =
-    !closed &&
-    neededG != null &&
-    request.spool?.remainingG != null &&
-    neededG > request.spool.remainingG
+  // The Spoolman spools it draws on, each with what it needs from it. Only a
+  // warning while it still matters, and only with both numbers known.
+  const spoolLines = [
+    ...request.filaments
+      .filter((filament) => filament.spoolmanSpoolId != null)
+      .reduce((bySpool, filament) => {
+        const line = bySpool.get(filament.spoolmanSpoolId!) ?? {
+          id: filament.spoolmanSpoolId!,
+          spool: filament.spool,
+          needed: 0 as number | null,
+        }
+        line.needed =
+          line.needed == null || filament.grams == null ? null : line.needed + filament.grams * left
+        bySpool.set(filament.spoolmanSpoolId!, line)
+        return bySpool
+      }, new Map<number, { id: number; spool: SpoolBadge | null; needed: number | null }>())
+      .values(),
+  ].map((line) => ({
+    ...line,
+    needed: line.needed == null ? null : Math.ceil(line.needed),
+    short:
+      !closed &&
+      line.needed != null &&
+      line.spool?.remainingG != null &&
+      line.needed > line.spool.remainingG,
+  }))
 
   const details = [
     request.requestedBy && `for ${request.requestedBy}`,
@@ -288,8 +351,33 @@ export function RequestRow({
           {request.priority === 'high' && !closed && <Badge tone="danger">Urgent</Badge>}
           {request.priority === 'low' && !closed && <Badge tone="neutral">Low</Badge>}
           {overdue && <Badge tone="danger">Overdue</Badge>}
-          {/* No colour dot here: the line below names the colour, and the
-              "Loaded on" hint shows its swatch. */}
+          {/* One swatch per colour, so a two-colour print reads as one at a glance. */}
+          {named.some((filament) => filament.colorHex) && (
+            <span className="flex items-center gap-0.5">
+              {named.map((filament, index) => {
+                const label = [
+                  filament.tool != null && `T${filament.tool}`,
+                  filament.material,
+                  filament.colorName,
+                ]
+                  .filter(Boolean)
+                  .join(' · ')
+                return (
+                  <Swatch
+                    key={`${filament.tool}-${index}`}
+                    color={filament.colorHex}
+                    title={label}
+                    label={label}
+                  />
+                )
+              })}
+            </span>
+          )}
+          {request.held === 'quote' && !closed && <Badge tone="warning">Awaiting answer</Badge>}
+          {request.held === 'deposit' && !closed && <Badge tone="warning">Deposit due</Badge>}
+          {request.price && billing && (
+            <PriceTag price={request.price} currency={billing.currency} />
+          )}
         </div>
 
         <p className="mt-0.5 text-xs text-[var(--color-ink-muted)]">
@@ -320,38 +408,38 @@ export function RequestRow({
           )}
         </p>
 
-        {request.spoolmanSpoolId != null && !closed && (
-          <p className="mt-0.5 text-xs text-[var(--color-ink-muted)]">
-            {request.spool?.url ? (
-              <a
-                href={request.spool.url}
-                target="_blank"
-                rel="noreferrer"
-                className="text-[var(--color-accent)] hover:underline"
-              >
-                Spool #{request.spoolmanSpoolId}
-              </a>
-            ) : (
-              `Spool #${request.spoolmanSpoolId}`
-            )}
-            {request.spool?.remainingG != null &&
-              ` · ${Math.round(request.spool.remainingG)} g left`}
-            {request.spool?.archived && ' · archived'}
-            {short && (
-              <span className="text-[var(--color-danger)]">
-                {' '}
-                · not enough for {left > 1 ? `all ${left}` : 'this'} (needs ~{neededG} g)
-              </span>
-            )}
-            {!short && request.shortfall && (
-              <span className="text-[var(--color-danger)]">
-                {' '}
-                · runs out before this one, after {request.shortfall.after} of the{' '}
-                {request.shortfall.of} queued prints on it
-              </span>
-            )}
-          </p>
-        )}
+        {!closed &&
+          spoolLines.map((line) => (
+            <p key={line.id} className="mt-0.5 text-xs text-[var(--color-ink-muted)]">
+              {line.spool?.url ? (
+                <a
+                  href={line.spool.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-[var(--color-accent)] hover:underline"
+                >
+                  Spool #{line.id}
+                </a>
+              ) : (
+                `Spool #${line.id}`
+              )}
+              {line.spool?.remainingG != null && ` · ${Math.round(line.spool.remainingG)} g left`}
+              {line.spool?.archived && ' · archived'}
+              {line.short && (
+                <span className="text-[var(--color-danger)]">
+                  {' '}
+                  · not enough for {left > 1 ? `all ${left}` : 'this'} (needs ~{line.needed} g)
+                </span>
+              )}
+              {!line.short && request.shortfall?.spoolId === line.id && (
+                <span className="text-[var(--color-danger)]">
+                  {' '}
+                  · runs out before this one, after {request.shortfall.after} of the{' '}
+                  {request.shortfall.of} queued prints on it
+                </span>
+              )}
+            </p>
+          ))}
 
         {request.status === 'printing' && request.live ? (
           <p className="mt-0.5 text-xs text-[var(--color-ink-muted)]">
@@ -387,7 +475,7 @@ export function RequestRow({
         )}
 
         {request.loaded && request.status === 'requested' && (
-          <LoadedHint verdict={request.loaded} />
+          <LoadedHint verdict={request.loaded} missing={request.missing} />
         )}
 
         {request.nextOn.length > 0 && request.status === 'requested' && (
@@ -510,7 +598,14 @@ export function RequestRow({
               </Button>
             )}
 
-            {canEdit && <RequestEditor request={request} filaments={filaments} pending={pending} />}
+            {canEdit && (
+              <RequestEditor
+                request={request}
+                filaments={filaments}
+                billing={billing}
+                pending={pending}
+              />
+            )}
           </>
         )}
 
@@ -577,19 +672,28 @@ export function RequestRow({
   )
 }
 
-/** Whether the filament this asks for is in a printer right now. */
-function LoadedHint({ verdict }: { verdict: LoadedVerdict }) {
+/** Whether the filaments this asks for are in a printer right now. */
+function LoadedHint({ verdict, missing }: { verdict: LoadedVerdict; missing: string | null }) {
   if (verdict.loaded) {
+    const slots = verdict.matches.map((match) => match.slot)
+    const distinct = slots.filter(
+      (slot, index) => slots.findIndex((other) => other.index === slot.index) === index,
+    )
     return (
       <p className="mt-0.5 flex items-center gap-1.5 text-xs text-[var(--color-ink-muted)]">
-        <SlotDot slot={verdict.slot} />
-        Loaded on {verdict.printerName}, slot {verdict.slot.index + 1}
+        {distinct.map((slot) => (
+          <SlotDot key={slot.index} slot={slot} />
+        ))}
+        Loaded on {verdict.printerName},{' '}
+        {distinct.length === 1
+          ? `slot ${distinct[0]!.index + 1}`
+          : `slots ${distinct.map((slot) => slot.index + 1).join(', ')}`}
       </p>
     )
   }
   return (
     <p className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-[var(--color-danger)]">
-      Not loaded
+      {missing ? `Not loaded: ${missing}` : 'Not loaded'}
       {verdict.instead.length > 0 && (
         <span className="flex items-center gap-1 text-[var(--color-ink-muted)]">
           (loaded:
@@ -612,4 +716,41 @@ function SlotDot({ slot }: { slot: FilamentSlot }) {
     .filter(Boolean)
     .join(' · ')
   return <Swatch color={slot.colorHex} title={label} label={label} />
+}
+
+const PRICE_LABEL: Record<PriceStatus, string> = {
+  none: '',
+  quoted: 'quoted',
+  accepted: 'accepted',
+  declined: 'declined',
+  invoiced: 'invoiced',
+  paid: 'paid',
+  waived: 'no charge',
+}
+
+/** The price and where it stands, for whoever does the charging. */
+function PriceTag({ price, currency }: { price: RowPrice; currency: string }) {
+  const amount = price.quoted != null ? formatMoney(price.quoted, currency) : null
+  const state = price.needsRequote
+    ? 'needs requote'
+    : price.expired
+      ? 'quote expired'
+      : PRICE_LABEL[price.status]
+  const tone =
+    price.status === 'declined'
+      ? 'danger'
+      : price.needsRequote || price.expired
+        ? 'warning'
+        : price.status === 'paid'
+          ? 'success'
+          : 'neutral'
+  const owing =
+    price.quoted != null && price.paid > 0 && price.paid < price.quoted && price.status !== 'waived'
+  return (
+    <Badge tone={tone} title={owing ? `${formatMoney(price.paid, currency)} paid` : undefined}>
+      {[price.status === 'waived' ? null : amount, state, owing && 'part paid']
+        .filter(Boolean)
+        .join(' · ')}
+    </Badge>
+  )
 }

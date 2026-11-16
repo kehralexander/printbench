@@ -9,8 +9,9 @@ import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { Field } from '@/components/ui/field'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Checkbox } from '@/components/ui/checkbox'
 import { saveSettings } from './actions'
+import { PricingSettingsSection } from './pricing-settings'
+import { Toggle } from './toggle'
 
 /**
  * The settings page, kept deliberately short.
@@ -214,6 +215,8 @@ export function SettingsForm({
         </CardContent>
       </Card>
 
+      <PricingSettingsSection value={values.pricing} onChange={(value) => set('pricing', value)} />
+
       {error && <p className="text-sm text-[var(--color-danger)]">{error}</p>}
 
       <div className="flex items-center gap-3">
@@ -229,27 +232,5 @@ export function SettingsForm({
         )}
       </div>
     </form>
-  )
-}
-
-function Toggle({
-  label,
-  hint,
-  checked,
-  onChange,
-}: {
-  label: string
-  hint: string
-  checked: boolean
-  onChange: (value: boolean) => void
-}) {
-  return (
-    <label className="flex cursor-pointer items-start gap-3">
-      <Checkbox checked={checked} onChange={(e) => onChange(e.target.checked)} className="mt-0.5" />
-      <span className="min-w-0">
-        <span className="block text-sm font-medium text-[var(--color-ink)]">{label}</span>
-        <span className="block text-xs text-[var(--color-ink-faint)]">{hint}</span>
-      </span>
-    </label>
   )
 }

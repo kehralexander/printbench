@@ -19,6 +19,7 @@ import {
   type SendResult as HostSendResult,
   type SlotAssignment,
   type StorageAdapter,
+  type ToolWish,
   type WantedFilament,
 } from '@pb/core'
 import { requireUser } from '@pb/auth'
@@ -79,8 +80,8 @@ export async function sendFileToPrinter(
   options: {
     /** Slots picked by hand, after a SlotChoice. */
     slots?: SlotAssignment[]
-    /** What the queue request asks for, to pick the slot by. */
-    wanted?: WantedFilament | null
+    /** What the queue request asks for, per tool, to pick the slots by. */
+    wanted?: readonly ToolWish[] | WantedFilament | null
   } = {},
 ): Promise<SendResult> {
   try {
@@ -189,7 +190,7 @@ export async function sendFileToPrinter(
 async function startOnSlots(
   host: PrintHostConfig,
   file: { filename: string; data: Uint8Array<ArrayBuffer> },
-  options: { slots?: SlotAssignment[]; wanted?: WantedFilament | null },
+  options: { slots?: SlotAssignment[]; wanted?: readonly ToolWish[] | WantedFilament | null },
 ): Promise<
   { result: HostSendResult; startedOn: string | null } | { error: string; choose: SlotChoice }
 > {

@@ -4,7 +4,13 @@ import { useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import type { FilamentOption } from '@/lib/filament-options'
 import { reorderQueue } from './actions'
-import { RequestRow, type QueueRow, type RowDrag, type SendTarget } from './request-row'
+import {
+  RequestRow,
+  type QueueBilling,
+  type QueueRow,
+  type RowDrag,
+  type SendTarget,
+} from './request-row'
 
 /**
  * The queue's rows, in an order that can be changed by dragging a row (or
@@ -15,12 +21,15 @@ export function QueueList({
   rows,
   canRun,
   filaments,
+  billing,
   sendTargets,
   sortable,
 }: {
   rows: QueueRow[]
   canRun: boolean
   filaments: FilamentOption[]
+  /** Set when the viewer does the charging and pricing is on. */
+  billing: QueueBilling | null
   sendTargets: SendTarget[]
   /** Only the open queue, and only for whoever works it. */
   sortable: boolean
@@ -97,6 +106,7 @@ export function QueueList({
               request={row}
               canRun={canRun}
               filaments={filaments}
+              billing={billing}
               sendTargets={sendTargets}
               drag={dragFor(id, index)}
             />
