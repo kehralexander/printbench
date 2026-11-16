@@ -33,10 +33,12 @@ This is a fork of [PrintBench/printbench](https://github.com/PrintBench/printben
 - **Live printer status** on the dashboard and its own page, with progress, times, temperatures and the filament loaded in each slot.
 - **Automatic print history.** Finished, cancelled and failed jobs are logged with real times, can be rated with a photo, and feed success rates per model, file and material.
 - **Spoolman as the filament inventory**, with low-spool warnings in the queue.
+- **Multi-filament requests**, with a colour and spool per tool read from the G-code, checked against what each printer has loaded.
+- **Pricing and billing**: cost per print from filament, power, machine time and failure rate; tiered prices; quotes requesters accept on their status page; payments, customer balances and PDF invoices.
 - **Status links for requesters**: a page and QR code that needs no account and shows a request's place in the queue and its print as it happens.
 - **G-code previews**, adding files to an existing model, and a consistent design across every page.
 
-See the [release notes](docs/releases/v0.8.0.md) for the details and upgrade notes.
+See the [release notes](docs/releases/v0.9.0.md) for the details and upgrade notes.
 
 ## Features
 
