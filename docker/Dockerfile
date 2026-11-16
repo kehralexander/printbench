@@ -21,7 +21,9 @@ RUN --mount=type=cache,target=/root/.npm npm ci
 FROM node:26-slim AS build
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
-COPY --from=deps /app/node_modules ./node_modules
+# The whole installed tree, not just the root node_modules: npm keeps some
+# packages inside a workspace's own node_modules (better-auth, for one).
+COPY --from=deps /app ./
 COPY . .
 RUN npm run build -w @pb/web
 
