@@ -36,9 +36,10 @@ This is a fork of [PrintBench/printbench](https://github.com/PrintBench/printben
 - **Multi-filament requests**, with a colour and spool per tool read from the G-code, checked against what each printer has loaded.
 - **Pricing and billing**: cost per print from filament, power, machine time and failure rate; tiered prices; quotes requesters accept on their status page; payments, customer balances and PDF invoices.
 - **Status links for requesters**: a page and QR code that needs no account and shows a request's place in the queue and its print as it happens.
+- **Sliced plates side by side**: print time, filament per slot, purge, layers and the stops that need someone at the printer, read once from each G-code file, with a panel per plate showing its timeline and footprint on the bed.
 - **G-code previews**, adding and renaming files in an existing model, and a consistent design across every page.
 
-See the [release notes](docs/releases/v0.10.0.md) for the details and upgrade notes.
+See the [release notes](docs/releases/v0.11.0.md) for the details and upgrade notes.
 
 ## Features
 
