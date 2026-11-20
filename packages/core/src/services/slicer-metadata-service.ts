@@ -1,6 +1,12 @@
 import type { StorageAdapter } from '../storage/types'
 import { parseGcodeMetadata, type GcodeMetadata } from '../slicer/gcode-metadata'
 import { scanUsedToolsStream, type GcodeTool } from '../slicer/gcode-tools'
+import { scanGcodeBodyStream } from '../slicer/gcode-body-scan'
+import {
+  SLICER_META_VERSION,
+  buildSlicerFileMeta,
+  type SlicerFileMeta,
+} from '../slicer/gcode-file-meta'
 import {
   SLICER_THUMBNAIL_WINDOW_BYTES,
   extractSlicerThumbnails,
@@ -26,10 +32,24 @@ import {
 const WINDOW_BYTES = 64 * 1024
 
 /** Extensions worth opening. Anything else is not a sliced file. */
-const GCODE_EXTENSIONS = new Set(['gcode', 'gco', 'g', 'ngc'])
+export const PARSABLE_SLICER_EXTENSIONS: readonly string[] = ['gcode', 'gco', 'g', 'ngc']
+const GCODE_EXTENSIONS = new Set(PARSABLE_SLICER_EXTENSIONS)
 
 export function isParsableSlicerFile(extension: string): boolean {
   return GCODE_EXTENSIONS.has(extension.toLowerCase().replace(/^\./, ''))
+}
+
+/**
+ * A file's stored read (model_files.slicer_meta), when the current reader made
+ * it. Null means the job has not reached the file yet, or last read it with an
+ * older reader, or could not read it: read the file instead.
+ */
+export function storedSlicerMeta(row: {
+  slicerMeta: unknown
+  slicerMetaVersion: number | null
+}): SlicerFileMeta | null {
+  if (row.slicerMetaVersion !== SLICER_META_VERSION || row.slicerMeta == null) return null
+  return row.slicerMeta as SlicerFileMeta
 }
 
 /**
@@ -80,17 +100,7 @@ export async function readGcodeMetadata(
   if (total == null || total === 0) return {}
 
   try {
-    // Small enough that two ranged reads would overlap anyway; take it in one.
-    if (total <= WINDOW_BYTES * 2) {
-      const whole = await readRange(storage, relativePath, 0, total - 1)
-      return parseGcodeMetadata(whole, whole)
-    }
-
-    const [head, tail] = await Promise.all([
-      readRange(storage, relativePath, 0, WINDOW_BYTES - 1),
-      readRange(storage, relativePath, total - WINDOW_BYTES, total - 1),
-    ])
-
+    const { head, tail } = await readEnds(storage, relativePath, total)
     return parseGcodeMetadata(head, tail)
   } catch {
     /*
@@ -132,6 +142,48 @@ export async function readGcodeWithTools(
     // The header's answer is still an answer.
     return { ...metadata, filaments: listed }
   }
+}
+
+/**
+ * Everything a sliced file says about itself and everything a full read of
+ * its body finds, for model_files.slicer_meta.
+ *
+ * Reads the whole file, so this belongs in a background job and nowhere else.
+ * Throws on storage errors, which the job records.
+ */
+export async function readSlicerFileMeta(
+  storage: StorageAdapter,
+  relativePath: string,
+  size: number | null,
+): Promise<SlicerFileMeta> {
+  const total = size ?? (await sizeOf(storage, relativePath))
+  if (total == null || total === 0) return {}
+
+  const { head, tail } = await readEnds(storage, relativePath, total)
+  // Binary G-code is compressed blocks; there is no text body to scan.
+  if (head.startsWith('GCDE')) return {}
+
+  const body = await scanGcodeBodyStream(await storage.createReadStream(relativePath))
+  return buildSlicerFileMeta(head, tail, body)
+}
+
+/** The first and last WINDOW_BYTES of a file, or the whole of a small one twice. */
+async function readEnds(
+  storage: StorageAdapter,
+  relativePath: string,
+  total: number,
+): Promise<{ head: string; tail: string }> {
+  // Small enough that two ranged reads would overlap anyway; take it in one.
+  if (total <= WINDOW_BYTES * 2) {
+    const whole = await readRange(storage, relativePath, 0, total - 1)
+    return { head: whole, tail: whole }
+  }
+
+  const [head, tail] = await Promise.all([
+    readRange(storage, relativePath, 0, WINDOW_BYTES - 1),
+    readRange(storage, relativePath, total - WINDOW_BYTES, total - 1),
+  ])
+  return { head, tail }
 }
 
 async function sizeOf(storage: StorageAdapter, relativePath: string): Promise<number | null> {

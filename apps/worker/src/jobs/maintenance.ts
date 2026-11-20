@@ -1,6 +1,8 @@
 import { sql } from 'drizzle-orm'
 import { getDb } from '@pb/db'
 import {
+  PARSABLE_SLICER_EXTENSIONS,
+  SLICER_META_VERSION,
   SYSTEM_ACTOR,
   derivedWorkFileSql,
   getSettings,
@@ -27,6 +29,8 @@ import { JOB, getQueue } from '@pb/jobs'
 const RECONCILE_BATCH = 500
 
 export async function handleMaintReconcile(): Promise<void> {
+  await requeueSlicerMeta()
+
   const db = getDb()
   const queue = getQueue()
 
@@ -58,6 +62,40 @@ export async function handleMaintReconcile(): Promise<void> {
     `[maint] re-enqueued ${analyse.length} analyses and ${thumbs.length} thumbnails ` +
       'that were left pending',
   )
+}
+
+/**
+ * Sliced files whose stored read is missing or from an older reader.
+ *
+ * This is the backfill: files sliced before the reader existed, and every file
+ * again whenever SLICER_META_VERSION is bumped. Files still waiting on analysis
+ * are left out — analysis queues their read itself. The queue is keyed by
+ * file, so resending one that is already queued is a no-op, and a batch per
+ * pass works through a large library without flooding the queue.
+ */
+async function requeueSlicerMeta(): Promise<void> {
+  const extensions = sql.join(
+    PARSABLE_SLICER_EXTENSIONS.map((extension) => sql`${extension}`),
+    sql`, `,
+  )
+  const due = await getDb().execute<{ id: string }>(sql`
+    SELECT f.id
+    FROM model_files f
+    WHERE f.missing_at IS NULL
+      AND f.extension IN (${extensions})
+      AND f.slicer_meta_version IS DISTINCT FROM ${SLICER_META_VERSION}
+      AND f.analysis_state <> 'pending'
+    ORDER BY f.created_at
+    LIMIT ${RECONCILE_BATCH}`)
+
+  if (due.rows.length === 0) return
+
+  await getQueue().sendMany(
+    JOB.fileSlicerMeta,
+    due.rows.map((row) => ({ fileId: row.id })),
+    { singletonKey: (payload) => payload.fileId },
+  )
+  console.log(`[maint] queued ${due.rows.length} sliced files to read`)
 }
 
 export async function handleMaintArchive(): Promise<void> {

@@ -65,16 +65,16 @@ const BGCODE_MAGIC = 'GCDE'
 
 /**
  * A plausible config key: letters, digits and the punctuation slicers actually
- * use. This is the guard that keeps base64 thumbnail payloads and `;SETTING_3`
+ * use (`^` for Orca's `[cm^3]`). This is the guard that keeps base64 thumbnail payloads and `;SETTING_3`
  * blobs — both of which contain `=` — out of the map.
  */
-const PLAUSIBLE_KEY = /^[a-z0-9_ .()[\]%/-]{1,60}$/
+const PLAUSIBLE_KEY = /^[a-z0-9_ .()[\]%/^-]{1,60}$/
 
 export function parseGcodeMetadata(head: string, tail: string): GcodeMetadata {
   // Nothing text-shaped to read, and pretending otherwise invents values.
   if (head.startsWith(BGCODE_MAGIC)) return {}
 
-  const config = collectConfig(head, tail)
+  const config = collectGcodeConfig(head, tail)
   const out: GcodeMetadata = {}
 
   // --- nozzle -------------------------------------------------------------
@@ -186,7 +186,7 @@ export function parseGcodeMetadata(head: string, tail: string): GcodeMetadata {
  * end of the file is the authoritative config — the header carries only a few
  * summary lines, and where they disagree the footer is right.
  */
-function collectConfig(head: string, tail: string): Map<string, string> {
+export function collectGcodeConfig(head: string, tail: string): Map<string, string> {
   const config = new Map<string, string>()
   for (const chunk of [head, tail]) {
     for (const raw of chunk.split(/\r?\n/)) {

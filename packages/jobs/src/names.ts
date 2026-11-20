@@ -16,6 +16,7 @@ export const JOB = {
   fileDigest: 'file.digest',
   fileAnalyze: 'file.analyze',
   fileThumbnail: 'file.thumbnail',
+  fileSlicerMeta: 'file.slicer-meta',
   searchRefresh: 'search.refresh',
   healthDetect: 'health.detect',
   scheduleSweep: 'library.schedule',
@@ -48,6 +49,7 @@ export const payloads = {
   [JOB.fileDigest]: z.object({ fileId: z.string().uuid() }),
   [JOB.fileAnalyze]: z.object({ fileId: z.string().uuid() }),
   [JOB.fileThumbnail]: z.object({ fileId: z.string().uuid() }),
+  [JOB.fileSlicerMeta]: z.object({ fileId: z.string().uuid() }),
   [JOB.searchRefresh]: z.object({ modelIds: z.array(z.string().uuid()).max(1000) }),
   [JOB.healthDetect]: z
     .object({
@@ -108,6 +110,13 @@ export const JOB_OPTIONS: Record<
   // Analysis is cheap and drives visible badges, so it outranks thumbnails.
   [JOB.fileAnalyze]: { concurrency: 2, priority: 6, policy: 'standard' },
   [JOB.fileThumbnail]: { concurrency: 2, priority: 4, policy: 'standard' },
+  /*
+   * Reads a sliced file end to end, which for a large plate is hundreds of
+   * megabytes: one at a time, behind thumbnails. `short`, keyed by file, so
+   * the sweep that backfills it can resend freely without queueing a file
+   * twice.
+   */
+  [JOB.fileSlicerMeta]: { concurrency: 1, priority: 3, policy: 'short' },
   // Digests only feed dedupe and rename detection; they can wait.
   [JOB.fileDigest]: { concurrency: 4, priority: 2, policy: 'standard' },
   [JOB.searchRefresh]: { concurrency: 2, priority: 7, policy: 'standard' },

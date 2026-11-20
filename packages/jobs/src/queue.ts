@@ -158,8 +158,16 @@ export class JobQueue {
     })
   }
 
-  /** Batched insert. A 50k-file library sends ~100 statements, not 50k. */
-  async sendMany<N extends JobName>(name: N, items: JobPayload<N>[]): Promise<void> {
+  /**
+   * Batched insert. A 50k-file library sends ~100 statements, not 50k.
+   *
+   * `singletonKey` names each job's key, for queues whose policy dedupes on it.
+   */
+  async sendMany<N extends JobName>(
+    name: N,
+    items: JobPayload<N>[],
+    options: { singletonKey?: (payload: JobPayload<N>) => string } = {},
+  ): Promise<void> {
     this.assertStarted(`send ${name}`)
     const CHUNK = 500
     for (let i = 0; i < items.length; i += CHUNK) {
@@ -168,6 +176,7 @@ export class JobQueue {
         priority: JOB_OPTIONS[name].priority ?? 0,
         retryLimit: 3,
         retryDelay: 30,
+        ...(options.singletonKey ? { singletonKey: options.singletonKey(payload) } : {}),
       }))
       await this.boss.insert(name, batch)
     }

@@ -495,7 +495,12 @@ async function upsertFiles(
           mtimeMs: file.mtimeMs,
           // Contents changed, so anything derived from them is now stale.
           ...(changed
-            ? { digest: null, analysisState: 'pending' as const, thumbState: 'pending' as const }
+            ? {
+                digest: null,
+                analysisState: 'pending' as const,
+                thumbState: 'pending' as const,
+                slicerMetaVersion: null,
+              }
             : {}),
         })
         .where(eq(schema.modelFiles.id, row.id))

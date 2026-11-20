@@ -17,6 +17,7 @@ import {
   isParsableSlicerFile,
   readGcodeMetadata,
   readGcodeWithTools,
+  storedSlicerMeta,
 } from './slicer-metadata-service'
 import type { GcodeTool } from '../slicer/gcode-tools'
 import { createStorageAdapter, libraryLocationFromRow } from '../storage/factory'
@@ -321,8 +322,9 @@ interface PlateFacts {
  * when none was chosen. Several with none chosen are different plates, and
  * picking one would be a guess.
  *
- * `scanTools` reads the whole file to see which tools it really changes to —
- * for linking a file, once, never for a suggestion in a form.
+ * From the stored read when the job has made one. Until then the file itself
+ * is read, and `scanTools` reads all of it to see which tools it really
+ * changes to — for linking a file, once, never for a suggestion in a form.
  */
 async function readPlate(
   db: Database,
@@ -337,6 +339,8 @@ async function readPlate(
       extension: schema.modelFiles.extension,
       size: schema.modelFiles.size,
       missingAt: schema.modelFiles.missingAt,
+      slicerMeta: schema.modelFiles.slicerMeta,
+      slicerMetaVersion: schema.modelFiles.slicerMetaVersion,
       model: schema.models,
       library: schema.libraries,
     })
@@ -353,13 +357,7 @@ async function readPlate(
       : undefined
   if (!gcode) return { durationMin: null, filamentG: null, tools: null }
 
-  const relativePath = gcode.model.isFileModel
-    ? gcode.model.path
-    : `${gcode.model.path}/${gcode.filename}`
-  const storage = createStorageAdapter(libraryLocationFromRow(gcode.library))
-  const metadata = options.scanTools
-    ? await readGcodeWithTools(storage, relativePath, gcode.size)
-    : await readGcodeMetadata(storage, relativePath, gcode.size)
+  const metadata = storedSlicerMeta(gcode) ?? (await readPlateFile(gcode, options.scanTools))
   const minutes = metadata.durationMin
   const tools = (metadata.filaments ?? []).map((tool) => ({
     ...tool,
@@ -384,6 +382,24 @@ async function readPlate(
   }
 }
 
+async function readPlateFile(
+  gcode: {
+    filename: string
+    size: number | null
+    model: typeof schema.models.$inferSelect
+    library: typeof schema.libraries.$inferSelect
+  },
+  scanTools = false,
+) {
+  const relativePath = gcode.model.isFileModel
+    ? gcode.model.path
+    : `${gcode.model.path}/${gcode.filename}`
+  const storage = createStorageAdapter(libraryLocationFromRow(gcode.library))
+  return scanTools
+    ? await readGcodeWithTools(storage, relativePath, gcode.size)
+    : await readGcodeMetadata(storage, relativePath, gcode.size)
+}
+
 /** Grams of filament the slicer says one print of this file takes, or null. */
 export async function plateFilamentG(
   db: Database,
@@ -399,7 +415,8 @@ export async function plateFilamentG(
 
 /**
  * The filaments of the file a request would print, for a form to fill its
- * rows from. Reads the whole file, so only on choosing one.
+ * rows from. Without a stored read this reads the whole file, so only on
+ * choosing one.
  */
 export async function plateFilaments(
   db: Database,

@@ -18,12 +18,14 @@ import {
   respondToQuote,
   setPriceStatus,
 } from './billing-service'
+import { SLICER_META_VERSION } from '../slicer/gcode-file-meta'
 import { getPrintUsage } from './filament-service'
 import { DEFAULT_PRICING, type PricingSettings } from './pricing'
 import {
   createRequest,
   getRequest,
   linkRequest,
+  plateFilaments,
   requestShareToken,
   setRequestStatus,
   updateRequest,
@@ -325,6 +327,40 @@ describe('multi-filament requests and pricing', { tags: ['integration'] }, () =>
     it('estimates a price for a model from its sliced file', async () => {
       expect(await modelPriceEstimate(db, MODEL, pricing)).toMatchObject({ min: 1, max: 1 })
       expect(await modelPriceEstimate(db, MODEL, { ...pricing, enabled: false })).toBeNull()
+    })
+
+    it('prices from the stored read when the job has made one', async () => {
+      // Twice the file's grams and a third tool, so a read of the file would show.
+      const stored = {
+        durationMin: 120,
+        filaments: [
+          { tool: 0, material: 'PLA', colorHex: '#ff0000', grams: 80, used: true },
+          { tool: 1, material: 'PETG', colorHex: '#0000ff', grams: 20, used: true },
+          { tool: 2, material: 'PLA', colorHex: '#ffffff', grams: 5, used: false },
+        ],
+      }
+      const store = (version: number) =>
+        db.execute(sql`
+          UPDATE model_files
+          SET slicer_meta = ${JSON.stringify(stored)}::jsonb, slicer_meta_version = ${version}
+          WHERE id = ${plateId}`)
+      try {
+        await store(SLICER_META_VERSION)
+        expect(await modelPriceEstimate(db, MODEL, pricing)).toMatchObject({ min: 2, max: 2 })
+        expect(await plateFilaments(db, MODEL, plateId)).toEqual({
+          tools: stored.filaments,
+          durationMin: 120,
+        })
+
+        // An older reader's result is not trusted; the file is read again.
+        await store(SLICER_META_VERSION - 1)
+        expect(await modelPriceEstimate(db, MODEL, pricing)).toMatchObject({ min: 1, max: 1 })
+        expect((await plateFilaments(db, MODEL, plateId)).tools).toHaveLength(2)
+      } finally {
+        await db.execute(sql`
+          UPDATE model_files SET slicer_meta = NULL, slicer_meta_version = NULL
+          WHERE id = ${plateId}`)
+      }
     })
   })
 })

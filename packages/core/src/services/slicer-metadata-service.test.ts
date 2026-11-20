@@ -4,7 +4,12 @@ import path from 'node:path'
 import { tmpdir } from 'node:os'
 import { LocalAdapter } from '../storage/local-adapter'
 import type { LibraryLocation } from '../storage/types'
-import { isParsableSlicerFile, readGcodeMetadata } from './slicer-metadata-service'
+import { SLICER_META_VERSION } from '../slicer/gcode-file-meta'
+import {
+  isParsableSlicerFile,
+  readGcodeMetadata,
+  storedSlicerMeta,
+} from './slicer-metadata-service'
 
 /**
  * The I/O half of reading a sliced file.
@@ -99,6 +104,28 @@ describe('readGcodeMetadata', () => {
   it('returns nothing for an empty file', async () => {
     const size = await write('empty.gcode', '')
     await expect(readGcodeMetadata(adapter, 'empty.gcode', size)).resolves.toEqual({})
+  })
+})
+
+describe('storedSlicerMeta', () => {
+  it('uses a read made by the current reader', () => {
+    const meta = { durationMin: 60 }
+    expect(storedSlicerMeta({ slicerMeta: meta, slicerMetaVersion: SLICER_META_VERSION })).toBe(
+      meta,
+    )
+  })
+
+  it('reads the file instead when the stored read is missing, old or failed', () => {
+    expect(storedSlicerMeta({ slicerMeta: null, slicerMetaVersion: null })).toBeNull()
+    expect(
+      storedSlicerMeta({
+        slicerMeta: { durationMin: 60 },
+        slicerMetaVersion: SLICER_META_VERSION - 1,
+      }),
+    ).toBeNull()
+    expect(
+      storedSlicerMeta({ slicerMeta: null, slicerMetaVersion: SLICER_META_VERSION }),
+    ).toBeNull()
   })
 })
 

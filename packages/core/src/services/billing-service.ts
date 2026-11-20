@@ -15,7 +15,11 @@ import {
   type Quote,
   type QuoteFilament,
 } from './pricing'
-import { isParsableSlicerFile, readGcodeMetadata } from './slicer-metadata-service'
+import {
+  isParsableSlicerFile,
+  readGcodeMetadata,
+  storedSlicerMeta,
+} from './slicer-metadata-service'
 import { createStorageAdapter, libraryLocationFromRow } from '../storage/factory'
 import { getRequest, type PrintRequest } from './request-service'
 
@@ -939,8 +943,8 @@ export interface ModelPriceEstimate {
 
 /**
  * "≈ €3.20 to print", for a model with sliced files: one copy of each plate
- * at the default tier, from the files' own figures. Reads only the two ends
- * of each file, and at most a few of them.
+ * at the default tier, from the files' own figures: their stored reads, or
+ * the two ends of a file the job has not read yet. At most a few files.
  */
 export async function modelPriceEstimate(
   db: Database,
@@ -953,6 +957,8 @@ export async function modelPriceEstimate(
       filename: schema.modelFiles.filename,
       extension: schema.modelFiles.extension,
       size: schema.modelFiles.size,
+      slicerMeta: schema.modelFiles.slicerMeta,
+      slicerMetaVersion: schema.modelFiles.slicerMetaVersion,
       model: schema.models,
       library: schema.libraries,
     })
@@ -972,11 +978,13 @@ export async function modelPriceEstimate(
   const prices: number[] = []
   for (const file of files.filter((row) => isParsableSlicerFile(row.extension)).slice(0, 3)) {
     try {
-      const metadata = await readGcodeMetadata(
-        createStorageAdapter(libraryLocationFromRow(file.library)),
-        file.model.isFileModel ? file.model.path : `${file.model.path}/${file.filename}`,
-        file.size,
-      )
+      const metadata =
+        storedSlicerMeta(file) ??
+        (await readGcodeMetadata(
+          createStorageAdapter(libraryLocationFromRow(file.library)),
+          file.model.isFileModel ? file.model.path : `${file.model.path}/${file.filename}`,
+          file.size,
+        ))
       const tools = (metadata.filaments ?? []).filter((tool) => tool.used)
       const filaments: QuoteFilament[] =
         tools.length > 0 && tools.every((tool) => tool.grams != null)

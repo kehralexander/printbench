@@ -17,7 +17,12 @@ import { withMemoryDiagnostics } from './memory-diagnostics'
 import { handleLibraryScan } from './jobs/scan'
 import { handleModelMove } from './jobs/move'
 import { handleMakerWorldImport } from './jobs/import'
-import { handleFileAnalyze, handleFileDigest, handleFileThumbnail } from './jobs/analyze'
+import {
+  handleFileAnalyze,
+  handleFileDigest,
+  handleFileSlicerMeta,
+  handleFileThumbnail,
+} from './jobs/analyze'
 import { handleHealthDetect } from './jobs/health'
 import { handleMaintArchive, handleMaintReconcile } from './jobs/maintenance'
 import { handleScheduleSweep } from './jobs/schedule'
@@ -140,13 +145,15 @@ async function startWork(): Promise<void> {
   await work(JOB.modelMove, handleModelMove)
   await work(JOB.fileAnalyze, handleFileAnalyze)
   await work(JOB.fileThumbnail, handleFileThumbnail)
+  await work(JOB.fileSlicerMeta, handleFileSlicerMeta)
   await work(JOB.fileDigest, handleFileDigest)
   await work(JOB.healthDetect, handleHealthDetect)
   await work(JOB.maintReconcile, handleMaintReconcile)
   await work(JOB.maintArchive, handleMaintArchive)
   await work(JOB.scheduleSweep, handleScheduleSweep)
   console.log(
-    '[worker] handlers: library.scan, model.move, file.analyze, file.thumbnail, file.digest, ' +
+    '[worker] handlers: library.scan, model.move, file.analyze, file.thumbnail, ' +
+      'file.slicer-meta, file.digest, ' +
       'health.detect, library.schedule, maint.reconcile, maint.archive',
   )
 

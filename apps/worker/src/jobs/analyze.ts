@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { and, eq, isNotNull } from 'drizzle-orm'
+import { and, eq, isNotNull, sql } from 'drizzle-orm'
 import { getDb, schema } from '@pb/db'
 import {
   createStorageAdapter,
@@ -10,7 +10,10 @@ import {
   isEmbeddedMetadataSource,
   fetchMakerWorldProjectMetadata,
   hasSlicerThumbnail,
+  isParsableSlicerFile,
+  readSlicerFileMeta,
   readSlicerThumbnails,
+  SLICER_META_VERSION,
   type StorageAdapter,
   type EmbeddedModelMetadata,
 } from '@pb/core'
@@ -26,7 +29,7 @@ import {
   renderEmbeddedThumbnail,
 } from '@pb/mesh'
 import type { JobPayload } from '@pb/jobs'
-import { JOB } from '@pb/jobs'
+import { JOB, getQueue } from '@pb/jobs'
 
 const THUMBNAIL_SIZE = 512
 const EMBEDDED_ARTWORK_SIZE = 2048
@@ -141,6 +144,14 @@ export async function handleFileAnalyze(
   }
 
   if (!format) {
+    /*
+     * A sliced file has no mesh, but its own read is due: analysis runs for
+     * every new and changed file, which makes this the one place that sees
+     * them all.
+     */
+    if (isParsableSlicerFile(file.extension)) {
+      await getQueue().send(JOB.fileSlicerMeta, { fileId: file.id }, { singletonKey: file.id })
+    }
     await db
       .update(schema.modelFiles)
       .set({ analysisState: 'skipped' })
@@ -316,6 +327,57 @@ async function slicerThumbnail(context: FileContext): Promise<void> {
       .where(eq(schema.modelFiles.id, file.id))
   } catch (error) {
     await recordFailure(file.id, 'thumbState', 'thumbError', error)
+  }
+}
+
+/**
+ * What a sliced file says about itself, and what reading its body finds.
+ *
+ * The whole file is streamed once, so this has its own low-priority queue.
+ * A file nothing can be read from is recorded with that error rather than
+ * retried: like an unparseable mesh, it will not read on the fourth attempt.
+ */
+export async function handleFileSlicerMeta(
+  payload: JobPayload<typeof JOB.fileSlicerMeta>,
+): Promise<void> {
+  const context = await loadFile(payload.fileId)
+  if (!context) return
+
+  const { file, storage, relativePath } = context
+  if (!isParsableSlicerFile(file.extension)) return
+
+  /*
+   * Only for the version of the file that was read. A rescan that saw it
+   * change while this ran has reset the version, and the read it queued
+   * will fill the row instead.
+   */
+  const unchanged = and(
+    eq(schema.modelFiles.id, file.id),
+    eq(schema.modelFiles.size, file.size),
+    sql`${schema.modelFiles.mtimeMs} IS NOT DISTINCT FROM ${file.mtimeMs}`,
+  )
+
+  try {
+    const meta = await readSlicerFileMeta(storage, relativePath, file.size ?? null)
+    await getDb()
+      .update(schema.modelFiles)
+      .set({
+        slicerMeta: meta as Record<string, unknown>,
+        slicerMetaVersion: SLICER_META_VERSION,
+        slicerMetaError: null,
+      })
+      .where(unchanged)
+  } catch (error) {
+    const text = message(error)
+    await getDb()
+      .update(schema.modelFiles)
+      .set({
+        slicerMeta: null,
+        slicerMetaVersion: SLICER_META_VERSION,
+        slicerMetaError: text.slice(0, 500),
+      })
+      .where(unchanged)
+    console.warn(`[slicer-meta] could not read ${file.filename}: ${text}`)
   }
 }
 

@@ -5,6 +5,7 @@ import {
   date,
   index,
   integer,
+  jsonb,
   numeric,
   pgTable,
   primaryKey,
@@ -141,6 +142,20 @@ export const modelFiles = pgTable(
     thumbError: text('thumb_error'),
     analysisState: derivedState('analysis_state').notNull().default('pending'),
     analysisError: text('analysis_error'),
+
+    /**
+     * What a sliced G-code file says about itself, and what a full read of its
+     * body found — see SlicerFileMeta in @pb/core. Null until read; a file
+     * nothing could be read from holds an empty object.
+     */
+    slicerMeta: jsonb('slicer_meta').$type<Record<string, unknown>>(),
+    /**
+     * SLICER_META_VERSION of the reader that filled slicer_meta. Null means
+     * never read, or the contents changed since; any other mismatch means the
+     * reader has learned more and the file is due again.
+     */
+    slicerMetaVersion: integer('slicer_meta_version'),
+    slicerMetaError: text('slicer_meta_error'),
 
     lastSeenAt: timestamp('last_seen_at', { withTimezone: true })
       .notNull()

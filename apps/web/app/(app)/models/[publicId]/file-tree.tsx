@@ -188,8 +188,10 @@ function FileRow({ file, depth }: { file: TreeFile; depth: number }) {
           />
         </span>
       ) : (
-        <span className="min-w-0 flex-1 basis-40 truncate text-sm" title={file.filename}>
-          {name}
+        <span className="flex min-w-0 flex-1 basis-40 flex-col gap-0.5">
+          <span className="truncate text-sm" title={file.filename}>
+            {name}
+          </span>
         </span>
       )}
 

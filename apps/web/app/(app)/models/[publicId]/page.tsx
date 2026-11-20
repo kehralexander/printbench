@@ -30,10 +30,12 @@ import {
   openRequestsForModel,
   printStats,
   formatMoney,
+  hasSlicerThumbnail,
   modelPriceEstimate,
   printSuggestions,
   slicersFor,
   spoolmanEnabled,
+  type SlicerFileMeta,
 } from '@pb/core'
 import { PageHeader } from '@/components/shell/page-header'
 import { Breadcrumbs } from '@/components/shell/breadcrumbs'
@@ -47,6 +49,8 @@ import { ModelPreview } from '@/components/viewer/model-preview'
 import { DownloadModelButton } from './download-button'
 import { ModelEditor } from './model-editor'
 import { FileSection } from './file-tree'
+import { slicerSummary } from './slicer-summaries'
+import { PlatesTable, type Plate } from './plates-table'
 import { PrintHistory } from './print-history'
 import { MoreActions } from './more-actions'
 import { LikeButton } from './like-button'
@@ -112,6 +116,8 @@ type FileRow = {
   thumb_state: string
   thumb_key: string | null
   triangle_count: number | null
+  slicer_meta: SlicerFileMeta | null
+  slicer_meta_error: string | null
   bbox_x: string | null
   bbox_y: string | null
   bbox_z: string | null
@@ -175,7 +181,7 @@ export default async function ModelPage({ params }: { params: Promise<{ publicId
 
   const files = await db.execute<FileRow>(sql`
     SELECT id, filename, extension, category, size, previewable, presupported, missing_at,
-           thumb_state, thumb_key, triangle_count, bbox_x, bbox_y, bbox_z
+           thumb_state, thumb_key, triangle_count, slicer_meta, slicer_meta_error, bbox_x, bbox_y, bbox_z
     FROM model_files WHERE model_id = ${model.id}
     ORDER BY category, filename
   `)
@@ -228,6 +234,11 @@ export default async function ModelPage({ params }: { params: Promise<{ publicId
 
   const presupportedCount = files.rows.filter((f) => f.presupported).length
 
+  const fileThumbUrl = (file: FileRow) =>
+    file.category === 'slicer' && file.thumb_state === 'ok' && file.thumb_key
+      ? `/api/files/${file.id}/thumb?v=${encodeURIComponent(file.thumb_key)}`
+      : null
+
   const meta = await db.execute<{
     creator: string | null
     creator_slug: string | null
@@ -249,6 +260,22 @@ export default async function ModelPage({ params }: { params: Promise<{ publicId
   const canEdit = can(policyUser, 'model:edit')
   const canLogPrints = can(policyUser, 'print:log')
   const canSend = can(policyUser, 'printhost:send')
+
+  // Sliced G-code, as prints rather than files: what the plates table compares.
+  const plates: Plate[] = files.rows
+    .filter(
+      (file) =>
+        file.category === 'slicer' && !file.missing_at && hasSlicerThumbnail(file.extension),
+    )
+    .map((file) => ({
+      id: file.id,
+      filename: file.filename,
+      thumbUrl: fileThumbUrl(file),
+      canOpenInSlicer: slicersFor(file.extension).length > 0,
+      canSendToPrinter: canSend && canSendToPrinter(file.extension),
+      slicer: slicerSummary(file.slicer_meta),
+      readFailed: file.slicer_meta_error != null,
+    }))
 
   const canQueue = can(policyUser, 'request:create')
 
@@ -598,6 +625,14 @@ export default async function ModelPage({ params }: { params: Promise<{ publicId
             </section>
           )}
 
+          {plates.length > 0 && (
+            <PlatesTable
+              publicId={model.public_id}
+              title={<SectionCount label="Sliced plates" count={plates.length} />}
+              plates={plates}
+            />
+          )}
+
           {CATEGORY_ORDER.filter((category) => byCategory.has(category)).map((category) => (
             <FileSection
               key={category}
@@ -619,10 +654,7 @@ export default async function ModelPage({ params }: { params: Promise<{ publicId
                 triangle_count: file.triangle_count,
                 canOpenInSlicer: slicersFor(file.extension).length > 0,
                 canSendToPrinter: canSend && canSendToPrinter(file.extension),
-                thumbUrl:
-                  file.category === 'slicer' && file.thumb_state === 'ok' && file.thumb_key
-                    ? `/api/files/${file.id}/thumb?v=${encodeURIComponent(file.thumb_key)}`
-                    : null,
+                thumbUrl: fileThumbUrl(file),
               }))}
             />
           ))}
