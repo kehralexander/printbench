@@ -608,6 +608,7 @@ export default async function ModelPage({ params }: { params: Promise<{ publicId
                   count={byCategory.get(category)!.length}
                 />
               }
+              renamePublicId={canEdit && model.library_writable ? model.public_id : null}
               files={byCategory.get(category)!.map((file) => ({
                 id: file.id,
                 filename: file.filename,

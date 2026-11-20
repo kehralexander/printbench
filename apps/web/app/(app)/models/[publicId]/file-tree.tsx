@@ -1,9 +1,12 @@
 'use client'
 
-import { createContext, useContext, useState, type ReactNode } from 'react'
-import { ChevronDown, ChevronRight, Folder } from 'lucide-react'
+import { createContext, useContext, useState, useTransition, type ReactNode } from 'react'
+import { useRouter } from 'next/navigation'
+import { ChevronDown, ChevronRight, Folder, Pencil } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
+import { EditableNameRow } from '@/components/ui/editable-name-row'
 import { SectionHeader } from '@/components/ui/section-header'
 import { SortControl } from '@/components/ui/sort-control'
 import { ListToolbar } from '@/components/ui/list-toolbar'
@@ -13,6 +16,7 @@ import { FileDownloadLink } from './file-download-link'
 import { OpenInSlicer } from './open-in-slicer'
 import { SendToPrinter } from './send-to-printer'
 import { compareFiles, compareFolders, orderTopLevel } from './file-tree-order'
+import { renameFile } from './rename-file-actions'
 
 export type FileSort = 'default' | 'name' | 'largest'
 
@@ -24,6 +28,9 @@ const FILE_SORTS: SortOption<FileSort>[] = [
 
 /** The chosen order, read by every folder in the tree however deep. */
 const SortContext = createContext<FileSort>('default')
+
+/** The model whose files may be renamed; null when this viewer cannot. */
+const RenameContext = createContext<string | null>(null)
 
 const fileComparators: Record<FileSort, (a: TreeFile, b: TreeFile) => number> = {
   default: compareFiles,
@@ -115,6 +122,36 @@ function countFiles(node: TreeNode): number {
 }
 
 function FileRow({ file, depth }: { file: TreeFile; depth: number }) {
+  const router = useRouter()
+  const renamePublicId = useContext(RenameContext)
+  const [renaming, setRenaming] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [pending, startTransition] = useTransition()
+  const name = file.displayName ?? file.filename
+
+  function save(next: string) {
+    if (!renamePublicId) return
+    if (next.trim() === name) {
+      setRenaming(false)
+      return
+    }
+    setError(null)
+    startTransition(async () => {
+      const result = await renameFile(renamePublicId, file.id, next)
+      if (!result.ok) {
+        setError(result.error)
+        return
+      }
+      setRenaming(false)
+      router.refresh()
+    })
+  }
+
+  function cancel() {
+    setRenaming(false)
+    setError(null)
+  }
+
   return (
     <li
       className={
@@ -139,9 +176,22 @@ function FileRow({ file, depth }: { file: TreeFile; depth: number }) {
         />
       )}
 
-      <span className="min-w-0 flex-1 basis-40 truncate text-sm" title={file.filename}>
-        {file.displayName ?? file.filename}
-      </span>
+      {renaming ? (
+        <span className="flex min-w-0 flex-1 basis-40 items-center gap-2">
+          <EditableNameRow
+            initial={name}
+            label={`New name for ${name}`}
+            pending={pending}
+            onSave={save}
+            onCancel={cancel}
+            className="max-w-none flex-1"
+          />
+        </span>
+      ) : (
+        <span className="min-w-0 flex-1 basis-40 truncate text-sm" title={file.filename}>
+          {name}
+        </span>
+      )}
 
       {file.presupported && <Badge tone="accent">supported</Badge>}
       {file.missing_at && <Badge tone="danger">missing</Badge>}
@@ -162,8 +212,25 @@ function FileRow({ file, depth }: { file: TreeFile; depth: number }) {
 
           {file.canSendToPrinter && <SendToPrinter fileId={file.id} filename={file.filename} />}
 
+          {renamePublicId && !renaming && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="shrink-0"
+              title={`Rename ${name}`}
+              aria-label={`Rename ${name}`}
+              onClick={() => setRenaming(true)}
+            >
+              <Pencil />
+            </Button>
+          )}
+
           <FileDownloadLink fileId={file.id} filename={file.filename} />
         </>
+      )}
+
+      {renaming && error && (
+        <p className="basis-full text-xs text-[var(--color-danger)]">{error}</p>
       )}
     </li>
   )
@@ -227,10 +294,13 @@ export function FileSection({
   title,
   icon,
   files,
+  renamePublicId = null,
 }: {
   title: ReactNode
   icon: ReactNode
   files: TreeFile[]
+  /** Set when this viewer may rename the files, to the model they belong to. */
+  renamePublicId?: string | null
 }) {
   const [sort, setSort] = useState<FileSort>('default')
   return (
@@ -243,7 +313,9 @@ export function FileSection({
         }
       />
       <Card className="overflow-hidden">
-        <FileTree files={files} sort={sort} />
+        <RenameContext.Provider value={renamePublicId}>
+          <FileTree files={files} sort={sort} />
+        </RenameContext.Provider>
       </Card>
     </section>
   )

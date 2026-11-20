@@ -37,6 +37,7 @@ export const AUDIT_ACTIONS = {
   'model.restored': 'Restored a removed model',
   'model.moved': 'Moved a model',
   'model.folder_created': 'Moved a single-file model into its own folder',
+  'model.file_renamed': 'Renamed a file in a model',
   'model.imported': 'Started a model import',
   'model.shared': 'Created a share link',
   'model.unshared': 'Revoked a share link',
