@@ -1,10 +1,10 @@
 'use client'
 
-import { useEffect, useRef, useState, useTransition } from 'react'
+import { useEffect, useRef, useState, useTransition, type ReactNode } from 'react'
 import { Link2, Link2Off, Loader2, Search, type LucideIcon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { findModels, type ModelChoice } from './actions'
 
 /**
@@ -23,6 +23,9 @@ export function LinkPicker({
   label = 'Link to library',
   icon: Icon = Link2,
   hint,
+  open: controlledOpen,
+  onOpenChange,
+  anchor,
 }: {
   linkedName: string | null
   /** The request's own title — the obvious first thing to search for. */
@@ -34,8 +37,16 @@ export function LinkPicker({
   icon?: LucideIcon
   /** A line above the search saying what picking a model will do. */
   hint?: string
+  /** Opened from elsewhere, such as a row's menu: no button of its own then. */
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
+  /** What the panel hangs from when opened from elsewhere. */
+  anchor?: ReactNode
 }) {
-  const [open, setOpen] = useState(false)
+  const [ownOpen, setOwnOpen] = useState(false)
+  const controlled = controlledOpen !== undefined
+  const open = controlled ? controlledOpen : ownOpen
+  const setOpen = (next: boolean) => (controlled ? onOpenChange?.(next) : setOwnOpen(next))
   const [query, setQuery] = useState(suggestQuery)
   const [results, setResults] = useState<ModelChoice[]>([])
   const [searching, startSearch] = useTransition()
@@ -83,19 +94,23 @@ export function LinkPicker({
         if (next) setQuery(suggestQuery)
       }}
     >
-      <PopoverTrigger asChild>
-        <Button
-          variant="ghost"
-          size="sm"
-          disabled={pending}
-          // The label is hidden on a narrow screen, so name the button outright
-          // rather than leaving a bare icon.
-          aria-label={linkedName ? `Change the link from ${linkedName}` : label}
-        >
-          <Icon />
-          <span className="hidden sm:inline">{linkedName ? 'Change link' : label}</span>
-        </Button>
-      </PopoverTrigger>
+      {controlled ? (
+        <PopoverAnchor asChild>{anchor ?? <span />}</PopoverAnchor>
+      ) : (
+        <PopoverTrigger asChild>
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={pending}
+            // The label is hidden on a narrow screen, so name the button outright
+            // rather than leaving a bare icon.
+            aria-label={linkedName ? `Change the link from ${linkedName}` : label}
+          >
+            <Icon />
+            <span className="hidden sm:inline">{linkedName ? 'Change link' : label}</span>
+          </Button>
+        </PopoverTrigger>
+      )}
 
       <PopoverContent className="w-80 p-2">
         {hint && <p className="mb-2 px-1 text-xs text-[var(--color-ink-muted)]">{hint}</p>}

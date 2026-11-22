@@ -3,7 +3,7 @@
 import { useTransition } from 'react'
 import type { Route } from 'next'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
-import { ArrowDownUp, Loader2 } from 'lucide-react'
+import { ArrowDownUp, Loader2, type LucideIcon } from 'lucide-react'
 import { cn } from '@/lib/cn'
 import type { SortOption } from '@/lib/sort'
 
@@ -21,11 +21,16 @@ export function SortControl<T extends string>({
   onChange,
   count,
   pending = false,
+  label = 'Sort',
+  icon: Icon = ArrowDownUp,
   className,
 }: {
   options: readonly SortOption<T>[]
   value: T
   onChange: (value: T) => void
+  /** What the control chooses; "Sort" unless it is another way of viewing the list. */
+  label?: string
+  icon?: LucideIcon
   /** How many items the list holds. Fewer than two have no order to choose, so nothing renders. */
   count?: number
   pending?: boolean
@@ -42,9 +47,9 @@ export function SortControl<T extends string>({
       {pending ? (
         <Loader2 aria-hidden className="size-4 animate-spin text-[var(--color-ink-faint)]" />
       ) : (
-        <ArrowDownUp aria-hidden className="size-4 text-[var(--color-ink-faint)]" />
+        <Icon aria-hidden className="size-4 text-[var(--color-ink-faint)]" />
       )}
-      <span>Sort</span>
+      <span>{label}</span>
       <select
         value={value}
         onChange={(event) => onChange(event.target.value as T)}
@@ -74,12 +79,16 @@ export function UrlSortControl<T extends string>({
   defaultValue,
   param = 'sort',
   count,
+  label,
+  icon,
   className,
 }: {
   options: readonly SortOption<T>[]
   value: T
   defaultValue: T
   param?: string
+  label?: string
+  icon?: LucideIcon
   /** See SortControl. */
   count?: number
   className?: string
@@ -109,6 +118,8 @@ export function UrlSortControl<T extends string>({
       // there is always a way back.
       count={value === defaultValue ? count : undefined}
       pending={pending}
+      label={label}
+      icon={icon}
       className={className}
     />
   )

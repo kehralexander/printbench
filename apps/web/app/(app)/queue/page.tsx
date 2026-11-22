@@ -30,19 +30,22 @@ import { filamentOptions } from '@/lib/filament-options'
 import { NotPermitted } from '@/components/shell/not-permitted'
 import { NextUpHint } from '@/components/printer/next-up-hint'
 import { Button } from '@/components/ui/button'
-import { Card } from '@/components/ui/card'
 import { ClockTime } from '@/components/ui/clock-time'
 import { EmptyState } from '@/components/ui/empty-state'
 import { FilterTabs } from '@/components/ui/filter-tabs'
 import { UrlSortControl } from '@/components/ui/sort-control'
 import { pickSort } from '@/lib/sort'
 import { AddRequests } from './add-requests'
+import { GroupControl, type QueueGrouping } from './group-control'
+import { groupRows, partName } from './grouping'
+import { PrintingNow, type PrinterFooter } from './printing-now'
 import { QueueList } from './queue-list'
 import { ResetOrder } from './reset-order'
 import type {
   NextHint,
   QueueBilling,
   QueueRow,
+  RowContext,
   SendTarget,
   SpoolBadge,
   SpoolShortfall,
@@ -63,7 +66,7 @@ const FILTERS: { key: string; label: string; status?: PrintRequestStatus[] }[] =
 export default async function QueuePage({
   searchParams,
 }: {
-  searchParams: Promise<{ filter?: string; sort?: string }>
+  searchParams: Promise<{ filter?: string; sort?: string; group?: string }>
 }) {
   const user = await getSessionUser()
   const policyUser = { id: user?.id ?? '', role: user?.role ?? null }
@@ -77,6 +80,7 @@ export default async function QueuePage({
   // Anything but the queue's own order is only a way of looking at it.
   const sort = pickSort(params.sort, QUEUE_SORTS, 'manual')
   const manual = sort === 'manual'
+  const grouping: QueueGrouping = params.group === 'none' ? 'none' : 'model'
 
   const db = getDb()
   const [requests, stats, requesters, filaments, printers, { pricing }] = await Promise.all([
@@ -268,10 +272,53 @@ export default async function QueuePage({
   // Idle printers whose next print no queue row already announces: nothing
   // loaded matches, or the most urgent request needs a different filament.
   const idleNotes = canRun ? hints.filter((hint) => !hint.ready || hint.swap) : []
+  const context: RowContext = { canRun, filaments, billing, sendTargets }
+  // "for Alexander" on every row says nothing when every row is for Alexander.
+  const showRequester =
+    new Set(rows.map((row) => row.requestedBy?.trim().toLowerCase() ?? '')).size > 1
+
+  /*
+   * What is on a printer gets a card of its own at the top of the open queue,
+   * with what that printer has loaded underneath. Its row then stays out of
+   * the list, or slim in its model's group so the group still adds up.
+   */
+  const showPrinting = filter.key === 'open' || filter.key === 'printing'
+  const printingRows = showPrinting ? rows.filter((row) => row.status === 'printing') : []
+  const onPrinterCard = new Set(printingRows.map((row) => row.id))
+  const allGroups = groupRows(rows, grouping === 'model')
+  const waitingRows = rows.filter((row) => row.status === 'requested')
+  const printingCards = printingRows.map((row) => {
+    const group = allGroups.find((candidate) => candidate.rows.some((r) => r.id === row.id))
+    const part =
+      group && group.rows.length > 1
+        ? { index: group.rows.findIndex((r) => r.id === row.id) + 1, of: group.rows.length }
+        : null
+    const snapshot = row.live
+      ? printers.find((printer) => printer.fresh && printer.name === row.live!.printerName)
+      : undefined
+    const matching = snapshot
+      ? waitingRows.filter(
+          (waiting) => waiting.loaded?.loaded && waiting.loaded.printerName === snapshot.name,
+        )
+      : []
+    const printer: PrinterFooter | null = snapshot
+      ? {
+          slots: snapshot.status?.slots ?? [],
+          upNext: matching[0] ? partName(matching[0]) : null,
+          matching: matching.length,
+          waiting: waitingRows.length,
+        }
+      : null
+    return { row, part, printer }
+  })
+  const listRows = filter.key === 'printing' ? [] : rows
+  const listed = listRows.filter((row) => !onPrinterCard.has(row.id)).length
+
   const sortLabel = QUEUE_SORTS.find((option) => option.value === sort)!.label
   const withSort = (query: Record<string, string>) => {
     const search = new URLSearchParams(query)
     if (!manual) search.set('sort', sort)
+    if (grouping !== 'model') search.set('group', grouping)
     return `/queue?${search.toString()}`
   }
 
@@ -313,6 +360,7 @@ export default async function QueuePage({
                 </span>
               )}
               {canRun && manual && manualOrder && filter.key === 'open' && <ResetOrder />}
+              <GroupControl value={grouping} />
               <UrlSortControl
                 options={QUEUE_SORTS}
                 value={sort}
@@ -347,16 +395,39 @@ export default async function QueuePage({
           }
         />
       ) : (
-        <Card className="overflow-hidden">
-          <QueueList
-            rows={rows}
-            canRun={canRun}
-            filaments={filaments}
-            billing={billing}
-            sendTargets={sendTargets}
-            sortable={canRun && manual && filter.key === 'open' && rows.length > 1}
-          />
-        </Card>
+        <>
+          {printingCards.length > 0 && (
+            <div className="mb-5 space-y-3">
+              {printingCards.map(({ row, part, printer }) => (
+                <PrintingNow
+                  key={row.id}
+                  request={row}
+                  context={context}
+                  part={part}
+                  printer={printer}
+                  showRequester={showRequester}
+                />
+              ))}
+            </div>
+          )}
+          {listed > 0 && (
+            <>
+              {printingCards.length > 0 && (
+                <h2 className="mb-2 ml-0.5 text-xs font-semibold uppercase tracking-wider text-[var(--color-ink-faint)]">
+                  Up next · {listed}
+                </h2>
+              )}
+              <QueueList
+                rows={listRows}
+                context={context}
+                sortable={canRun && manual && filter.key === 'open' && rows.length > 1}
+                grouped={grouping === 'model'}
+                onPrinterCard={[...onPrinterCard]}
+                showRequester={showRequester}
+              />
+            </>
+          )}
+        </>
       )}
     </>
   )

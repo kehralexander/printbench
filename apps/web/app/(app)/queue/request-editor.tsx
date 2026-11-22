@@ -45,15 +45,23 @@ export function RequestEditor({
   filaments,
   billing,
   pending: rowPending,
+  open: controlledOpen,
+  onOpenChange,
 }: {
   request: QueueRow
   filaments: FilamentOption[]
   /** Set when the viewer does the charging: adds who pays, the tier and the price. */
   billing: QueueBilling | null
   pending: boolean
+  /** Opened from elsewhere, such as a row's menu: no button of its own then. */
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
 }) {
   const router = useRouter()
-  const [open, setOpen] = useState(false)
+  const [ownOpen, setOwnOpen] = useState(false)
+  const controlled = controlledOpen !== undefined
+  const open = controlled ? controlledOpen : ownOpen
+  const setOpen = (next: boolean) => (controlled ? onOpenChange?.(next) : setOwnOpen(next))
   const [title, setTitle] = useState(request.title)
   const [quantity, setQuantity] = useState(String(request.quantity))
   const [priority, setPriority] = useState<PrintRequestPriority>(request.priority)
@@ -184,16 +192,18 @@ export function RequestEditor({
         setOpen(next)
       }}
     >
-      <Dialog.Trigger asChild>
-        <Button
-          variant="ghost"
-          size="sm"
-          disabled={rowPending}
-          aria-label={`Edit ${request.title}`}
-        >
-          <Pencil />
-        </Button>
-      </Dialog.Trigger>
+      {!controlled && (
+        <Dialog.Trigger asChild>
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={rowPending}
+            aria-label={`Edit ${request.title}`}
+          >
+            <Pencil />
+          </Button>
+        </Dialog.Trigger>
+      )}
 
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-50 bg-black/50" />

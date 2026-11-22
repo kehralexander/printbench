@@ -1,10 +1,10 @@
 'use client'
 
-import { useState, useTransition } from 'react'
+import { useState, useTransition, type ReactNode } from 'react'
 import { useRouter } from 'next/navigation'
 import { Loader2, Send } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import type { SlotAssignment } from '@pb/core'
 import type { SlotChoice } from '../models/[publicId]/send-actions'
 import { SlotChooser } from '../models/[publicId]/slot-chooser'
@@ -27,6 +27,11 @@ export function SendButton({
   targets,
   disabled,
   onError,
+  variant = 'ghost',
+  label = 'Send & start',
+  open: controlledOpen,
+  onOpenChange,
+  anchor,
 }: {
   requestId: string
   title: string
@@ -34,9 +39,19 @@ export function SendButton({
   targets: SendTarget[]
   disabled: boolean
   onError: (message: string | null) => void
+  variant?: 'ghost' | 'secondary' | 'primary'
+  label?: string
+  /** Opened from elsewhere, such as a row's menu: no button of its own then. */
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
+  /** What the panel hangs from when opened from elsewhere. */
+  anchor?: ReactNode
 }) {
   const router = useRouter()
-  const [open, setOpen] = useState(false)
+  const [ownOpen, setOwnOpen] = useState(false)
+  const controlled = controlledOpen !== undefined
+  const open = controlled ? controlledOpen : ownOpen
+  const setOpen = (next: boolean) => (controlled ? onOpenChange?.(next) : setOwnOpen(next))
   const [pending, startTransition] = useTransition()
   const [message, setMessage] = useState<string | null>(null)
   const [choosing, setChoosing] = useState<{ target: SendTarget; choice: SlotChoice } | null>(null)
@@ -71,18 +86,22 @@ export function SendButton({
         if (!next) setChoosing(null)
       }}
     >
-      <PopoverTrigger asChild>
-        <Button
-          variant="ghost"
-          size="sm"
-          disabled={disabled || pending}
-          aria-label={`Send ${title} to a printer and start it`}
-          title={message ?? 'Send the sliced file to a printer and start it'}
-        >
-          {pending ? <Loader2 className="animate-spin" /> : <Send />}
-          <span className="hidden sm:inline">Send &amp; start</span>
-        </Button>
-      </PopoverTrigger>
+      {controlled ? (
+        <PopoverAnchor asChild>{anchor ?? <span />}</PopoverAnchor>
+      ) : (
+        <PopoverTrigger asChild>
+          <Button
+            variant={variant}
+            size="sm"
+            disabled={disabled || pending}
+            aria-label={`Send ${title} to a printer and start it`}
+            title={message ?? 'Send the sliced file to a printer and start it'}
+          >
+            {pending ? <Loader2 className="animate-spin" /> : <Send />}
+            <span className="hidden sm:inline">{label}</span>
+          </Button>
+        </PopoverTrigger>
+      )}
       <PopoverContent className={choosing ? 'w-80 p-3' : 'w-72 p-3'}>
         {choosing ? (
           <SlotChooser
