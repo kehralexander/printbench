@@ -2,7 +2,7 @@
 
 import { createContext, useContext, useState, useTransition, type ReactNode } from 'react'
 import { useRouter } from 'next/navigation'
-import { ChevronDown, ChevronRight, Folder, Pencil, Trash2 } from 'lucide-react'
+import { ChevronDown, ChevronRight, Folder, ImageIcon, Pencil, Trash2 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -18,6 +18,7 @@ import { SendToPrinter } from './send-to-printer'
 import { compareFiles, compareFolders, orderTopLevel } from './file-tree-order'
 import { renameFile } from './rename-file-actions'
 import { deleteFile } from './delete-file-actions'
+import { saveModel } from './edit-actions'
 
 export type FileSort = 'default' | 'name' | 'largest'
 
@@ -35,6 +36,9 @@ const RenameContext = createContext<string | null>(null)
 
 /** The model whose files may be deleted; null when this viewer cannot. */
 const DeleteContext = createContext<string | null>(null)
+
+/** The model whose thumbnail may be chosen; null when this viewer cannot. */
+const ThumbnailContext = createContext<string | null>(null)
 
 const fileComparators: Record<FileSort, (a: TreeFile, b: TreeFile) => number> = {
   default: compareFiles,
@@ -68,6 +72,10 @@ export type TreeFile = {
   canSendToPrinter: boolean
   /** A per-file preview, shown for sliced files so plates can be told apart. */
   thumbUrl?: string | null
+  /** Can stand in as the model's thumbnail: an image, or a file with a render. */
+  canBeThumbnail?: boolean
+  /** This file is the model's chosen thumbnail. */
+  isThumbnail?: boolean
 }
 
 type TreeNode = {
@@ -129,6 +137,7 @@ function FileRow({ file, depth }: { file: TreeFile; depth: number }) {
   const router = useRouter()
   const renamePublicId = useContext(RenameContext)
   const deletePublicId = useContext(DeleteContext)
+  const thumbnailPublicId = useContext(ThumbnailContext)
   const [renaming, setRenaming] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [pending, startTransition] = useTransition()
@@ -140,6 +149,21 @@ function FileRow({ file, depth }: { file: TreeFile; depth: number }) {
     setError(null)
     startTransition(async () => {
       const result = await deleteFile(deletePublicId, file.id)
+      if (!result.ok) {
+        setError(result.error)
+        return
+      }
+      router.refresh()
+    })
+  }
+
+  function toggleThumbnail() {
+    if (!thumbnailPublicId) return
+    setError(null)
+    startTransition(async () => {
+      const result = await saveModel(thumbnailPublicId, {
+        previewFileId: file.isThumbnail ? null : file.id,
+      })
       if (!result.ok) {
         setError(result.error)
         return
@@ -214,6 +238,7 @@ function FileRow({ file, depth }: { file: TreeFile; depth: number }) {
         </span>
       )}
 
+      {file.isThumbnail && <Badge tone="accent">thumbnail</Badge>}
       {file.presupported && <Badge tone="accent">supported</Badge>}
       {file.missing_at && <Badge tone="danger">missing</Badge>}
 
@@ -243,6 +268,22 @@ function FileRow({ file, depth }: { file: TreeFile; depth: number }) {
               onClick={() => setRenaming(true)}
             >
               <Pencil />
+            </Button>
+          )}
+
+          {thumbnailPublicId && file.canBeThumbnail && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="shrink-0"
+              disabled={pending}
+              title={file.isThumbnail ? 'Use the automatic thumbnail' : 'Use as thumbnail'}
+              aria-label={
+                file.isThumbnail ? 'Use the automatic thumbnail' : `Use ${name} as thumbnail`
+              }
+              onClick={toggleThumbnail}
+            >
+              <ImageIcon />
             </Button>
           )}
 
@@ -329,6 +370,7 @@ export function FileSection({
   files,
   renamePublicId = null,
   deletePublicId = null,
+  thumbnailPublicId = null,
 }: {
   title: ReactNode
   icon: ReactNode
@@ -337,6 +379,8 @@ export function FileSection({
   renamePublicId?: string | null
   /** Set when this viewer may delete single files, to the model they belong to. */
   deletePublicId?: string | null
+  /** Set when this viewer may choose the model's thumbnail. */
+  thumbnailPublicId?: string | null
 }) {
   const [sort, setSort] = useState<FileSort>('default')
   return (
@@ -351,7 +395,9 @@ export function FileSection({
       <Card className="overflow-hidden">
         <RenameContext.Provider value={renamePublicId}>
           <DeleteContext.Provider value={deletePublicId}>
-            <FileTree files={files} sort={sort} />
+            <ThumbnailContext.Provider value={thumbnailPublicId}>
+              <FileTree files={files} sort={sort} />
+            </ThumbnailContext.Provider>
           </DeleteContext.Provider>
         </RenameContext.Provider>
       </Card>

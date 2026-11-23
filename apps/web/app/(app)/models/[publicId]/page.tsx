@@ -331,6 +331,7 @@ export default async function ModelPage({ params }: { params: Promise<{ publicId
     .filter((f) => f.thumb_state === 'ok' && !f.missing_at)
     .sort(
       (a, b) =>
+        Number(b.id === model.preview_file_id) - Number(a.id === model.preview_file_id) ||
         Number(a.category === 'slicer') - Number(b.category === 'slicer') ||
         Number(b.size) - Number(a.size),
     )[0]
@@ -652,6 +653,7 @@ export default async function ModelPage({ params }: { params: Promise<{ publicId
                   ? model.public_id
                   : null
               }
+              thumbnailPublicId={canEdit ? model.public_id : null}
               files={byCategory.get(category)!.map((file) => ({
                 id: file.id,
                 filename: file.filename,
@@ -663,6 +665,9 @@ export default async function ModelPage({ params }: { params: Promise<{ publicId
                 canOpenInSlicer: slicersFor(file.extension).length > 0,
                 canSendToPrinter: canSend && canSendToPrinter(file.extension),
                 thumbUrl: fileThumbUrl(file),
+                canBeThumbnail:
+                  !file.missing_at && (file.category === 'image' || file.thumb_state === 'ok'),
+                isThumbnail: file.id === model.preview_file_id,
               }))}
             />
           ))}
