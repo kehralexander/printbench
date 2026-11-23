@@ -10,7 +10,7 @@ import { FileDownloadLink } from './file-download-link'
 import { OpenInSlicer } from './open-in-slicer'
 import { SendToPrinter } from './send-to-printer'
 import { readPlateDetails } from './plate-actions'
-import type { Plate } from './plates-table'
+import type { Plate } from './plate-strip'
 import type { PlateDetails, PlateFilament, TimelineStop } from './slicer-summaries'
 
 type Loaded = { ok: true; details: PlateDetails } | { ok: false; error: string }

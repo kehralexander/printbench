@@ -41,6 +41,8 @@ export function QueueButton({
   openCount,
   files,
   filaments,
+  fileId: presetFileId,
+  label,
 }: {
   modelId: string
   modelPublicId: string
@@ -50,12 +52,16 @@ export function QueueButton({
   /** Printable files: sliced plates and meshes. */
   files: { id: string; filename: string; category: 'model' | 'slicer' }[]
   filaments: FilamentOption[]
+  /** The file to queue, when the button belongs to one plate. */
+  fileId?: string
+  /** Replaces the default label; for a button that belongs to one plate. */
+  label?: string
 }) {
   const router = useRouter()
   const sliced = files.filter((file) => file.category === 'slicer')
   const meshes = files.filter((file) => file.category === 'model')
   // The only sliced plate is almost certainly the one to print.
-  const defaultFile = sliced.length === 1 ? sliced[0]!.id : ''
+  const defaultFile = presetFileId ?? (sliced.length === 1 ? sliced[0]!.id : '')
 
   const [open, setOpen] = useState(false)
   const [requestedBy, setRequestedBy] = useState('')
@@ -150,19 +156,21 @@ export function QueueButton({
     >
       <PopoverTrigger asChild>
         <Button
-          variant="ghost"
+          variant={label ? 'secondary' : 'ghost'}
           size="sm"
           aria-label={
-            openCount > 0
-              ? `Print queue: ${openCount} open for this model`
-              : 'Add this model to the print queue'
+            label
+              ? `${label}: add this plate to the print queue`
+              : openCount > 0
+                ? `Print queue: ${openCount} open for this model`
+                : 'Add this model to the print queue'
           }
         >
           <ClipboardList />
-          <span className="hidden sm:inline">
+          <span className={label ? undefined : 'hidden sm:inline'}>
             {/* The count is the useful part when there is one: it says someone
                 is already waiting, which changes whether you add another. */}
-            {openCount > 0 ? `Queued (${openCount})` : 'Queue'}
+            {label ?? (openCount > 0 ? `Queued (${openCount})` : 'Queue')}
           </span>
         </Button>
       </PopoverTrigger>

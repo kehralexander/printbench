@@ -16,7 +16,19 @@ import { SlotChooser } from './slot-chooser'
  * mesh goes through a slicer first, which is what the Open in… button is for.
  */
 
-export function SendToPrinter({ fileId, filename }: { fileId: string; filename: string }) {
+export function SendToPrinter({
+  fileId,
+  filename,
+  iconOnly = false,
+  primary = false,
+}: {
+  fileId: string
+  filename: string
+  /** Just the icon, for rows where the column says what it is. */
+  iconOnly?: boolean
+  /** The main action where it appears, as on a plate ready to print. */
+  primary?: boolean
+}) {
   const [hosts, setHosts] = useState<{ id: string; name: string }[]>([])
   const [loaded, setLoaded] = useState(false)
   const [startPrint, setStartPrint] = useState(false)
@@ -52,9 +64,15 @@ export function SendToPrinter({ fileId, filename }: { fileId: string; filename: 
       }}
     >
       <PopoverTrigger asChild>
-        <Button variant="ghost" size="sm" title={`Send ${filename} to a printer`}>
+        <Button
+          variant={primary ? 'primary' : 'ghost'}
+          size={iconOnly ? 'icon' : 'sm'}
+          className="shrink-0"
+          title={`Send ${filename} to a printer`}
+          aria-label={`Send ${filename} to a printer`}
+        >
           <Send />
-          <span className="hidden sm:inline">Send</span>
+          {!iconOnly && <span className={primary ? undefined : 'hidden sm:inline'}>Send</span>}
         </Button>
       </PopoverTrigger>
 

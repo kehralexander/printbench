@@ -35,7 +35,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         }}
       />
       <main className="min-w-0 flex-1">
-        <div className="mx-auto max-w-6xl px-5 py-8 sm:px-8">
+        <div className="mx-auto max-w-6xl 2xl:max-w-[1600px] px-5 py-8 sm:px-8">
           <PreviewStatusProvider>{children}</PreviewStatusProvider>
         </div>
       </main>

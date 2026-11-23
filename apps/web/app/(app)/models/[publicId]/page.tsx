@@ -4,16 +4,7 @@ import type { Route } from 'next'
 import { notFound } from 'next/navigation'
 import { headers } from 'next/headers'
 import { sql } from 'drizzle-orm'
-import {
-  AlertTriangle,
-  Box,
-  Boxes,
-  FileStack,
-  FolderOpen,
-  HardDrive,
-  Layers,
-  Package,
-} from 'lucide-react'
+import { AlertTriangle, Box, Boxes, FolderOpen, HardDrive, Package } from 'lucide-react'
 import { getDb } from '@pb/db'
 import { filamentOptions } from '@/lib/filament-options'
 import { getSessionUser } from '@pb/auth'
@@ -37,20 +28,22 @@ import {
   spoolmanEnabled,
   type SlicerFileMeta,
 } from '@pb/core'
-import { PageHeader } from '@/components/shell/page-header'
 import { Breadcrumbs } from '@/components/shell/breadcrumbs'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { AutoRefresh } from '@/components/ui/auto-refresh'
 import { Callout } from '@/components/ui/callout'
 import { SectionHeader } from '@/components/ui/section-header'
 import { formatBytes, formatDimensions } from '@/components/model/model-card'
-import { ModelPreview } from '@/components/viewer/model-preview'
+import { formatDate, formatDuration, formatGrams } from '@/lib/format'
 import { DownloadModelButton } from './download-button'
 import { ModelEditor } from './model-editor'
-import { FileSection } from './file-tree'
+import { FilesTable } from './files-table'
 import { slicerSummary } from './slicer-summaries'
-import { PlatesTable, type Plate } from './plates-table'
+import { PlateStrip, type Plate } from './plate-strip'
+import { PreviewProvider, type PreviewItem } from './preview-context'
+import { PreviewRail } from './preview-rail'
+import { ClampedNotes } from './clamped-notes'
 import { PrintHistory } from './print-history'
 import { MoreActions } from './more-actions'
 import { LikeButton } from './like-button'
@@ -213,25 +206,6 @@ export default async function ModelPage({ params }: { params: Promise<{ publicId
         : link,
     )
 
-  // Grouping by category makes a 40-file model legible; a flat list does not.
-  const byCategory = new Map<string, FileRow[]>()
-  for (const file of files.rows) {
-    const list = byCategory.get(file.category) ?? []
-    list.push(file)
-    byCategory.set(file.category, list)
-  }
-
-  const CATEGORY_ORDER = ['model', 'image', 'slicer', 'document', 'archive', 'video', 'other']
-  const CATEGORY_LABELS: Record<string, string> = {
-    model: '3D models',
-    image: 'Images',
-    slicer: 'Sliced files',
-    document: 'Documents',
-    archive: 'Archives',
-    video: 'Video',
-    other: 'Other',
-  }
-
   const presupportedCount = files.rows.filter((f) => f.presupported).length
 
   const fileThumbUrl = (file: FileRow) =>
@@ -275,6 +249,7 @@ export default async function ModelPage({ params }: { params: Promise<{ publicId
       canSendToPrinter: canSend && canSendToPrinter(file.extension),
       slicer: slicerSummary(file.slicer_meta),
       readFailed: file.slicer_meta_error != null,
+      printed: 0,
     }))
 
   const canQueue = can(policyUser, 'request:create')
@@ -394,8 +369,184 @@ export default async function ModelPage({ params }: { params: Promise<{ publicId
       requestHeaders.get('x-forwarded-host') ?? requestHeaders.get('host') ?? 'localhost:3000'
     }`
 
+  // A plate counts as printed when a logged print names its file.
+  for (const plate of plates) {
+    plate.printed = prints.filter(
+      (print) => print.filename === plate.filename && print.status === 'success',
+    ).length
+  }
+
+  /*
+   * What the rail can show: every mesh the browser can parse, and every image.
+   * The files table hands one of these to the rail when its row is picked.
+   */
+  const previewItems: PreviewItem[] = files.rows
+    .filter(
+      (file) =>
+        !file.missing_at &&
+        (VIEWABLE.has(file.extension.toLowerCase()) || file.category === 'image'),
+    )
+    .map((file) => {
+      const mesh = VIEWABLE.has(file.extension.toLowerCase())
+      return {
+        id: file.id,
+        filename: file.filename,
+        kind: mesh ? ('mesh' as const) : ('image' as const),
+        format: mesh ? (file.extension.toLowerCase() as PreviewItem['format']) : undefined,
+        size: Number(file.size),
+        triangles: file.triangle_count,
+        dimensions: formatDimensions(
+          Number(file.bbox_x ?? 0),
+          Number(file.bbox_y ?? 0),
+          Number(file.bbox_z ?? 0),
+        ),
+        imageUrl: mesh
+          ? file.thumb_state === 'ok' && file.thumb_key
+            ? `/api/files/${file.id}/thumb?v=${encodeURIComponent(file.thumb_key)}`
+            : null
+          : `/api/files/${file.id}/raw?inline=1`,
+        canOpenInSlicer: slicersFor(file.extension).length > 0,
+      }
+    })
+
+  const artwork = selectedImage
+    ? {
+        url: `/api/files/${selectedImage.id}/raw?inline=1`,
+        fileId: selectedImage.id,
+        filename: selectedImage.filename,
+      }
+    : hero
+      ? {
+          url: `/api/files/${hero.id}/thumb?v=${encodeURIComponent(hero.thumb_key ?? '')}`,
+          fileId: hero.id,
+          filename: hero.filename,
+        }
+      : null
+
+  // The headline figures: what printing it takes, and what has happened so far.
+  const timedPlates = plates.filter((plate) => plate.slicer?.durationMin != null)
+  const plateMinutes = timedPlates.reduce((sum, p) => sum + (p.slicer?.durationMin ?? 0), 0)
+  const plateGrams = plates.reduce((sum, p) => sum + (p.slicer?.filamentUsedG ?? 0), 0)
+  const plateMaterials = [
+    ...new Set(plates.map((plate) => plate.slicer?.material).filter(Boolean)),
+  ].join(', ')
+  const kpis: { label: string; value: string; sub?: string; title?: string }[] = [
+    ...(timedPlates.length > 0
+      ? [
+          {
+            label: 'Print time',
+            value: formatDuration(plateMinutes),
+            sub: `${plates.length} ${plates.length === 1 ? 'plate' : 'plates'}`,
+          },
+        ]
+      : []),
+    ...(plateGrams > 0
+      ? [{ label: 'Filament', value: formatGrams(plateGrams), sub: plateMaterials || undefined }]
+      : []),
+    ...(priceEstimate
+      ? [
+          {
+            label: 'Cost',
+            value:
+              priceEstimate.min === priceEstimate.max
+                ? formatMoney(priceEstimate.min, settings.pricing.currency)
+                : `${formatMoney(priceEstimate.min, settings.pricing.currency)}–${formatMoney(priceEstimate.max, settings.pricing.currency)}`,
+            sub: 'one copy',
+            title: `One copy at ${priceEstimate.tier} rates, from the sliced ${
+              priceEstimate.plates === 1 ? 'file' : 'files'
+            }`,
+          },
+        ]
+      : []),
+    ...(heroDimensions ? [{ label: 'Dimensions', value: heroDimensions }] : []),
+    {
+      label: 'Files',
+      value: String(model.file_count),
+      sub: formatBytes(Number(model.total_size)),
+    },
+    ...(!model.is_package
+      ? [
+          {
+            label: 'Printed',
+            value: `${stats.total}×`,
+            sub: stats.lastPrintedAt ? `last ${formatDate(stats.lastPrintedAt)}` : undefined,
+          },
+        ]
+      : []),
+    ...(queued.length > 0 ? [{ label: 'Queued', value: `${queued.length}×` }] : []),
+  ]
+
+  const queueProps =
+    canQueue && !model.is_package
+      ? {
+          modelId: model.id,
+          modelPublicId: model.public_id,
+          modelName: model.name,
+          openCount: queued.length,
+          files: files.rows
+            .filter(
+              (file) =>
+                !file.missing_at && (file.category === 'model' || file.category === 'slicer'),
+            )
+            .map((file) => ({
+              id: file.id,
+              filename: file.filename,
+              category: file.category as 'model' | 'slicer',
+            })),
+          filaments,
+        }
+      : null
+
+  const licence = model.license_url ? (
+    <a
+      href={model.license_url}
+      target="_blank"
+      rel="noreferrer"
+      className="text-[var(--color-accent)] hover:underline"
+    >
+      {model.license ?? 'Licence'}
+    </a>
+  ) : (
+    model.license
+  )
+  const byline = [
+    creator ? (
+      <span key="creator">
+        by{' '}
+        {creatorSlug ? (
+          <Link
+            href={`/creators/${creatorSlug}` as Route}
+            className="text-[var(--color-accent)] hover:underline"
+          >
+            {creator}
+          </Link>
+        ) : (
+          creator
+        )}
+      </span>
+    ) : null,
+    sourceLink ? (
+      <span key="source">
+        from{' '}
+        <a
+          href={sourceLink.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-[var(--color-accent)] hover:underline"
+        >
+          {sourceLink.host?.replace(/^www\./i, '') ?? 'the original page'}
+        </a>
+      </span>
+    ) : null,
+    licence ? <span key="licence">{licence}</span> : null,
+  ].filter(Boolean)
+
   return (
-    <>
+    <PreviewProvider
+      items={previewItems}
+      initialMeshId={viewable?.id ?? null}
+      hasArtwork={artwork != null}
+    >
       {(rendering || printing) && (
         <AutoRefresh intervalMs={rendering ? RENDERING_REFRESH_MS : PRINTING_REFRESH_MS} />
       )}
@@ -408,59 +559,33 @@ export default async function ModelPage({ params }: { params: Promise<{ publicId
         ]}
       />
 
-      <PageHeader
-        title={model.name}
-        actions={
-          model.missing_at ? (
+      <Card className="mb-6 p-5">
+        <header className="flex flex-wrap items-start justify-between gap-4">
+          <div className="min-w-0 flex-1 basis-80">
+            <h1 className="break-words text-2xl font-semibold tracking-tight">{model.name}</h1>
+            {byline.length > 0 && (
+              <p className="mt-1 flex flex-wrap gap-x-1.5 text-sm text-[var(--color-ink-muted)]">
+                {byline.map((part, index) => (
+                  <span key={index} className="flex gap-x-1.5">
+                    {index > 0 && <span aria-hidden>·</span>}
+                    {part}
+                  </span>
+                ))}
+              </p>
+            )}
+          </div>
+          {model.missing_at ? (
             <Badge tone="danger">Missing from disk</Badge>
           ) : (
-            <div className="flex flex-wrap items-center gap-3">
+            <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-2">
               {model.is_package && (
                 <Badge tone="accent">
                   <Package className="size-3" />
                   Package
                 </Badge>
               )}
-              <Badge tone="neutral">
-                <FileStack className="size-3" />
-                {model.file_count} {model.file_count === 1 ? 'file' : 'files'} ·{' '}
-                {formatBytes(Number(model.total_size))}
-              </Badge>
-              {priceEstimate && (
-                <Badge
-                  tone="neutral"
-                  title={`One copy at ${priceEstimate.tier} rates, from the sliced ${
-                    priceEstimate.plates === 1 ? 'file' : 'files'
-                  }`}
-                >
-                  ≈{' '}
-                  {priceEstimate.min === priceEstimate.max
-                    ? formatMoney(priceEstimate.min, settings.pricing.currency)
-                    : `${formatMoney(priceEstimate.min, settings.pricing.currency)}–${formatMoney(priceEstimate.max, settings.pricing.currency)}`}{' '}
-                  to print
-                </Badge>
-              )}
               {user && <LikeButton publicId={model.public_id} liked={liked} />}
-              {canQueue && !model.is_package && (
-                <QueueButton
-                  modelId={model.id}
-                  modelPublicId={model.public_id}
-                  modelName={model.name}
-                  openCount={queued.length}
-                  files={files.rows
-                    .filter(
-                      (file) =>
-                        !file.missing_at &&
-                        (file.category === 'model' || file.category === 'slicer'),
-                    )
-                    .map((file) => ({
-                      id: file.id,
-                      filename: file.filename,
-                      category: file.category as 'model' | 'slicer',
-                    }))}
-                  filaments={filaments}
-                />
-              )}
+              {queueProps && <QueueButton {...queueProps} />}
               {canCollect && (
                 <CollectionPicker
                   publicId={model.public_id}
@@ -521,9 +646,23 @@ export default async function ModelPage({ params }: { params: Promise<{ publicId
                 }
               />
             </div>
-          )
-        }
-      />
+          )}
+        </header>
+
+        <dl className="mt-4 flex flex-wrap gap-x-10 gap-y-3 border-t border-[var(--color-border)] pt-4">
+          {kpis.map((kpi) => (
+            <div key={kpi.label} title={kpi.title} className="min-w-0">
+              <dt className="text-xs uppercase tracking-wider text-[var(--color-ink-faint)]">
+                {kpi.label}
+              </dt>
+              <dd className="whitespace-nowrap text-lg font-semibold tabular-nums leading-snug">
+                {kpi.value}
+              </dd>
+              {kpi.sub && <dd className="text-xs text-[var(--color-ink-faint)]">{kpi.sub}</dd>}
+            </div>
+          ))}
+        </dl>
+      </Card>
 
       {model.missing_at && (
         <Callout
@@ -546,48 +685,8 @@ export default async function ModelPage({ params }: { params: Promise<{ publicId
         — without this the column grows to fit it and the page scrolls
         sideways on a phone, however much the file rows truncate.
       */}
-      <div className="grid gap-6 lg:grid-cols-[1fr_260px]">
-        <div className="min-w-0 space-y-6">
-          {(viewable || selectedImage || hero) && (
-            <ModelPreview
-              key={model.public_id}
-              name={model.name}
-              imageUrl={
-                selectedImage
-                  ? `/api/files/${selectedImage.id}/raw?inline=1`
-                  : hero
-                    ? `/api/files/${hero.id}/thumb?v=${encodeURIComponent(hero.thumb_key ?? '')}`
-                    : null
-              }
-              model={
-                viewable
-                  ? {
-                      fileId: viewable.id,
-                      format: viewable.extension.toLowerCase() as 'stl' | '3mf' | 'obj' | 'ply',
-                      fileSize: Number(viewable.size),
-                      filename: viewable.filename.split('/').pop() ?? viewable.filename,
-                      thumbnailFileId: hero?.id ?? null,
-                      thumbnailKey: hero?.thumb_key ?? null,
-                      maxBytes: settings.viewerMaxBytes,
-                    }
-                  : null
-              }
-            />
-          )}
-
-          {model.notes && (
-            <Card>
-              <details className="p-4">
-                <summary className="cursor-pointer text-sm font-semibold">
-                  Description and notes
-                </summary>
-                <p className="mt-2 whitespace-pre-wrap break-words text-sm text-[var(--color-ink-muted)]">
-                  {model.notes}
-                </p>
-              </details>
-            </Card>
-          )}
-
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_340px] 2xl:grid-cols-[minmax(0,1fr)_480px]">
+        <div className="min-w-0 space-y-8">
           {model.is_package && packageChildren.rows.length > 0 && (
             <section>
               <SectionHeader
@@ -627,50 +726,43 @@ export default async function ModelPage({ params }: { params: Promise<{ publicId
           )}
 
           {plates.length > 0 && (
-            <PlatesTable
-              publicId={model.public_id}
-              title={<SectionCount label="Sliced plates" count={plates.length} />}
-              plates={plates}
-            />
+            <PlateStrip publicId={model.public_id} plates={plates} queue={queueProps} />
           )}
 
-          {CATEGORY_ORDER.filter((category) => byCategory.has(category)).map((category) => (
-            <FileSection
-              key={category}
-              icon={category === 'model' ? <Box /> : <Layers />}
-              title={
-                <SectionCount
-                  label={CATEGORY_LABELS[category] ?? category}
-                  count={byCategory.get(category)!.length}
-                />
-              }
-              renamePublicId={canEdit && model.library_writable ? model.public_id : null}
-              deletePublicId={
-                can(policyUser, 'model:delete') &&
-                model.library_writable &&
-                !model.is_file_model &&
-                !model.is_package
-                  ? model.public_id
-                  : null
-              }
-              thumbnailPublicId={canEdit ? model.public_id : null}
-              files={byCategory.get(category)!.map((file) => ({
+          {files.rows.length > 0 && (
+            <FilesTable
+              permissions={{
+                renamePublicId: canEdit && model.library_writable ? model.public_id : null,
+                deletePublicId:
+                  can(policyUser, 'model:delete') &&
+                  model.library_writable &&
+                  !model.is_file_model &&
+                  !model.is_package
+                    ? model.public_id
+                    : null,
+                thumbnailPublicId: canEdit ? model.public_id : null,
+              }}
+              files={files.rows.map((file) => ({
                 id: file.id,
                 filename: file.filename,
                 extension: file.extension,
+                category: file.category,
                 size: file.size,
                 presupported: file.presupported,
                 missing_at: file.missing_at,
                 triangle_count: file.triangle_count,
                 canOpenInSlicer: slicersFor(file.extension).length > 0,
                 canSendToPrinter: canSend && canSendToPrinter(file.extension),
-                thumbUrl: fileThumbUrl(file),
+                thumbUrl:
+                  file.thumb_state === 'ok' && file.thumb_key
+                    ? `/api/files/${file.id}/thumb?v=${encodeURIComponent(file.thumb_key)}`
+                    : null,
                 canBeThumbnail:
                   !file.missing_at && (file.category === 'image' || file.thumb_state === 'ok'),
                 isThumbnail: file.id === model.preview_file_id,
               }))}
             />
-          ))}
+          )}
 
           {!model.is_package && (
             <PrintHistory
@@ -696,59 +788,52 @@ export default async function ModelPage({ params }: { params: Promise<{ publicId
           )}
         </div>
 
-        <aside className="min-w-0 space-y-4">
-          <Card>
-            <CardHeader className="p-4 pb-2">
-              <CardTitle>Model information</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3 p-4 pt-0 text-sm">
-              <Meta label="Library">
+        {/* First on a phone, where the picture is what tells you which model this is. */}
+        <aside className="order-first min-w-0 space-y-4 lg:sticky lg:top-6 lg:order-none lg:self-start">
+          <PreviewRail
+            name={model.name}
+            artwork={artwork}
+            thumbnail={hero ? { fileId: hero.id, key: hero.thumb_key } : null}
+            maxBytes={settings.viewerMaxBytes}
+          />
+
+          <Card className="space-y-4 p-4 text-sm">
+            <div className="space-y-2">
+              <h2 className="text-sm font-semibold">About</h2>
+              {model.notes ? (
+                <ClampedNotes text={model.notes} />
+              ) : (
+                <p className="text-[var(--color-ink-faint)]">No description.</p>
+              )}
+              {tags.length > 0 && (
+                <div className="flex flex-wrap gap-1 pt-1">
+                  {tags.map((tag) => (
+                    <Link key={tag.slug} href={`/tags/${tag.slug}` as Route}>
+                      <Badge className="hover:text-[var(--color-ink)]">{tag.name}</Badge>
+                    </Link>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2 border-t border-[var(--color-border)] pt-3 text-xs">
+              <Fact label="Library">
                 <span className="flex items-center gap-1.5">
-                  <HardDrive className="size-3.5 text-[var(--color-ink-faint)]" />
+                  <HardDrive className="size-3.5 shrink-0 text-[var(--color-ink-faint)]" />
                   {model.library_name}
                 </span>
-              </Meta>
-
-              <Meta label="Folder">
-                <span className="flex items-start gap-1.5 break-all font-mono text-xs">
-                  <FolderOpen className="mt-0.5 size-3.5 shrink-0 text-[var(--color-ink-faint)]" />
+              </Fact>
+              <Fact label="Folder">
+                <span className="flex items-start gap-1.5 break-all font-mono">
+                  <FolderOpen className="size-3.5 shrink-0 text-[var(--color-ink-faint)]" />
                   {model.path}
                 </span>
-              </Meta>
-
-              {heroDimensions && (
-                <Meta label="Dimensions">
-                  <span className="tabular-nums">{heroDimensions}</span>
-                </Meta>
-              )}
-
+              </Fact>
               {presupportedCount > 0 && (
-                <Meta label="Supports">{presupportedCount} pre-supported files</Meta>
+                <Fact label="Supports">{presupportedCount} pre-supported files</Fact>
               )}
-
-              {creator && (
-                <Meta label="Creator">
-                  {creatorSlug ? (
-                    <Link
-                      href={`/creators/${creatorSlug}` as Route}
-                      className="text-[var(--color-accent)] hover:underline"
-                    >
-                      {creator}
-                    </Link>
-                  ) : (
-                    creator
-                  )}
-                </Meta>
-              )}
-
-              {sourceLink && (
-                <Meta label="Source">
-                  <ExternalLink link={sourceLink} />
-                </Meta>
-              )}
-
               {memberships.length > 0 && (
-                <Meta label="Collections">
+                <Fact label="Collections">
                   <span className="flex flex-wrap gap-1">
                     {memberships.map((collection) => (
                       <Link key={collection.id} href={`/collections/${collection.slug}` as Route}>
@@ -756,44 +841,14 @@ export default async function ModelPage({ params }: { params: Promise<{ publicId
                       </Link>
                     ))}
                   </span>
-                </Meta>
+                </Fact>
               )}
-
-              {tags.length > 0 && (
-                <Meta label="Tags">
-                  <span className="flex flex-wrap gap-1">
-                    {tags.map((tag) => (
-                      <Link key={tag.slug} href={`/tags/${tag.slug}` as Route}>
-                        <Badge className="hover:text-[var(--color-ink)]">{tag.name}</Badge>
-                      </Link>
-                    ))}
-                  </span>
-                </Meta>
-              )}
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="p-4 pb-2">
-              <CardTitle>Licence</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3 p-4 pt-0 text-sm">
-              {model.license_url ? (
-                <a
-                  href={model.license_url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="block break-words text-[var(--color-accent)] hover:underline"
-                >
-                  {model.license ?? 'View licence'}
-                </a>
-              ) : (
-                <p className="text-[var(--color-ink-muted)]">{model.license ?? 'Not recorded'}</p>
-              )}
-
+              <Fact label="Licence">
+                {licence ?? <span className="text-[var(--color-ink-muted)]">Not recorded</span>}
+              </Fact>
               {/* With nothing recorded at all, one "Not recorded" says it. */}
               {(model.commercial_use != null || model.license || model.license_url) && (
-                <Meta label="Commercial use">
+                <Fact label="Commercial use">
                   <span
                     className={
                       model.commercial_use === true
@@ -809,11 +864,10 @@ export default async function ModelPage({ params }: { params: Promise<{ publicId
                         ? 'Not permitted'
                         : 'Not recorded'}
                   </span>
-                </Meta>
+                </Fact>
               )}
-
               {licenceExpiry && (
-                <Meta label="Expiry">
+                <Fact label="Expiry">
                   <span
                     className={
                       licenceExpiry.expired
@@ -830,46 +884,44 @@ export default async function ModelPage({ params }: { params: Promise<{ publicId
                         ? ' — Expiring soon'
                         : ''}
                   </span>
-                </Meta>
+                </Fact>
               )}
-
               {model.license_notes && (
-                <Meta label="Notes">
+                <Fact label="Licence notes">
                   <span className="whitespace-pre-wrap break-words text-[var(--color-ink-muted)]">
                     {model.license_notes}
                   </span>
-                </Meta>
+                </Fact>
               )}
-            </CardContent>
+              {sourceLink && (
+                <Fact label="Source">
+                  <ExternalLink link={sourceLink} />
+                </Fact>
+              )}
+              {additionalLinks.length > 0 && (
+                <Fact label="Links">
+                  <span className="space-y-1">
+                    {additionalLinks.map((link) => (
+                      <ExternalLink key={link.url} link={link} />
+                    ))}
+                  </span>
+                </Fact>
+              )}
+            </dl>
           </Card>
-
-          {additionalLinks.length > 0 && (
-            <Card>
-              <CardHeader className="p-4 pb-2">
-                <CardTitle>Links</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-2 p-4 pt-0 text-sm">
-                {additionalLinks.map((link) => (
-                  <ExternalLink key={link.url} link={link} />
-                ))}
-              </CardContent>
-            </Card>
-          )}
         </aside>
       </div>
-    </>
+    </PreviewProvider>
   )
 }
 
-/** One labelled fact in the sidebar: a small caps label over its value. */
-function Meta({ label, children }: { label: string; children: ReactNode }) {
+/** One labelled fact in the rail: a quiet label beside its value. */
+function Fact({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div>
-      <p className="text-xs font-medium uppercase tracking-wide text-[var(--color-ink-faint)]">
-        {label}
-      </p>
-      <div className="mt-0.5">{children}</div>
-    </div>
+    <>
+      <dt className="text-[var(--color-ink-faint)]">{label}</dt>
+      <dd className="min-w-0">{children}</dd>
+    </>
   )
 }
 

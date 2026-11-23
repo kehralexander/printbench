@@ -22,9 +22,11 @@ import { createSlicerLinks } from './print-actions'
 interface Props {
   fileId: string
   filename: string
+  /** Just the icon, for rows where the column says what it is. */
+  iconOnly?: boolean
 }
 
-export function OpenInSlicer({ fileId, filename }: Props) {
+export function OpenInSlicer({ fileId, filename, iconOnly = false }: Props) {
   const [links, setLinks] = useState<{ id: string; label: string; url: string; hint: string }[]>([])
   const [note, setNote] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
@@ -65,9 +67,15 @@ export function OpenInSlicer({ fileId, filename }: Props) {
       }}
     >
       <PopoverTrigger asChild>
-        <Button variant="ghost" size="sm" title={`Open ${filename} in a slicer`}>
+        <Button
+          variant="ghost"
+          size={iconOnly ? 'icon' : 'sm'}
+          className="shrink-0"
+          title={`Open ${filename} in a slicer`}
+          aria-label={`Open ${filename} in a slicer`}
+        >
           {loading ? <Loader2 className="animate-spin" /> : <ExternalLink />}
-          <span className="hidden sm:inline">Open in…</span>
+          {!iconOnly && <span className="hidden sm:inline">Open in…</span>}
         </Button>
       </PopoverTrigger>
 
