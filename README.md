@@ -38,9 +38,10 @@ This is a fork of [PrintBench/printbench](https://github.com/PrintBench/printben
 - **Status links for requesters**: a page and QR code that needs no account and shows a request's place in the queue and its print as it happens.
 - **Sliced plates side by side**: print time, filament per slot, purge, layers and the stops that need someone at the printer, read once from each G-code file, with a panel per plate showing its timeline and footprint on the bed.
 - **A print queue grouped by model**: what is on each printer in a card of its own with its progress and the printer's loaded slots, the parts of one model in one card, and one button per row with the rest in a menu.
-- **G-code previews**, adding and renaming files in an existing model, and a consistent design across every page.
+- **A model page built around printing**: a strip of sliced plates to pick and send, mesh files grouped into parts with their variants, and the picture and 3D view in a rail that follows the picked file.
+- **G-code previews**, adding, renaming and deleting files in an existing model, choosing its thumbnail, and a consistent design across every page.
 
-See the [release notes](docs/releases/v0.12.0.md) for the details and upgrade notes.
+See the [release notes](docs/releases/v0.13.0.md) for the details and upgrade notes.
 
 ## Features
 
