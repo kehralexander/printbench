@@ -225,3 +225,59 @@ export async function excludedPaths(db: Database, libraryId: string): Promise<Se
 
   return new Set(rows.map((row) => row.path))
 }
+
+export interface FileDeleteTarget {
+  model: { id: string; path: string; isFileModel: boolean }
+  file: { id: string; modelId: string; filename: string; size: string | number | null }
+}
+
+/**
+ * Deletes one file of a model, from storage and from the index together.
+ *
+ * Like deleting a whole model, only for a library this application may write
+ * to. The model's last file is refused: that is deleting the model, which has
+ * its own, clearer confirmation. If the file was the model's chosen thumbnail,
+ * the choice is cleared so the card falls back to an automatic one.
+ */
+export async function deleteModelFile(
+  db: Database,
+  storage: StorageAdapter,
+  target: FileDeleteTarget,
+): Promise<{ bytesFreed: number }> {
+  const { model, file } = target
+  if (file.modelId !== model.id) throw new DeleteError('That file is not part of this model.')
+  if (model.isFileModel) {
+    throw new DeleteError('This model is a single file. Delete the model instead.')
+  }
+  if (storage.library.kind === 'in_place' && !storage.library.allowWrites) {
+    throw new DeleteError('That library is read-only, so its files are never modified.')
+  }
+
+  const count = await db.execute<{ n: number }>(
+    sql`SELECT count(*)::int AS n FROM model_files WHERE model_id = ${model.id}`,
+  )
+  if ((count.rows[0]?.n ?? 0) <= 1) {
+    throw new DeleteError('That is the last file in this model. Delete the model instead.')
+  }
+
+  try {
+    await storage.remove(`${model.path}/${file.filename}`)
+  } catch (error) {
+    if (error instanceof ReadOnlyLibraryError) throw error
+    throw new DeleteError(
+      `Could not delete the file: ${error instanceof Error ? error.message : String(error)}`,
+    )
+  }
+
+  const bytes = Number(file.size ?? 0)
+  await db.delete(schema.modelFiles).where(eq(schema.modelFiles.id, file.id))
+  await db.execute(sql`
+    UPDATE models SET
+      preview_file_id = CASE WHEN preview_file_id = ${file.id} THEN NULL ELSE preview_file_id END,
+      file_count = greatest(file_count - 1, 0),
+      total_size = greatest(total_size - ${bytes}, 0),
+      updated_at = now()
+    WHERE id = ${model.id}`)
+
+  return { bytesFreed: bytes }
+}

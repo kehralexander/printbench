@@ -644,6 +644,14 @@ export default async function ModelPage({ params }: { params: Promise<{ publicId
                 />
               }
               renamePublicId={canEdit && model.library_writable ? model.public_id : null}
+              deletePublicId={
+                can(policyUser, 'model:delete') &&
+                model.library_writable &&
+                !model.is_file_model &&
+                !model.is_package
+                  ? model.public_id
+                  : null
+              }
               files={byCategory.get(category)!.map((file) => ({
                 id: file.id,
                 filename: file.filename,

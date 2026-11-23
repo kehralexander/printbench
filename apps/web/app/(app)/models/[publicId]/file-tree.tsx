@@ -2,7 +2,7 @@
 
 import { createContext, useContext, useState, useTransition, type ReactNode } from 'react'
 import { useRouter } from 'next/navigation'
-import { ChevronDown, ChevronRight, Folder, Pencil } from 'lucide-react'
+import { ChevronDown, ChevronRight, Folder, Pencil, Trash2 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -17,6 +17,7 @@ import { OpenInSlicer } from './open-in-slicer'
 import { SendToPrinter } from './send-to-printer'
 import { compareFiles, compareFolders, orderTopLevel } from './file-tree-order'
 import { renameFile } from './rename-file-actions'
+import { deleteFile } from './delete-file-actions'
 
 export type FileSort = 'default' | 'name' | 'largest'
 
@@ -31,6 +32,9 @@ const SortContext = createContext<FileSort>('default')
 
 /** The model whose files may be renamed; null when this viewer cannot. */
 const RenameContext = createContext<string | null>(null)
+
+/** The model whose files may be deleted; null when this viewer cannot. */
+const DeleteContext = createContext<string | null>(null)
 
 const fileComparators: Record<FileSort, (a: TreeFile, b: TreeFile) => number> = {
   default: compareFiles,
@@ -124,10 +128,25 @@ function countFiles(node: TreeNode): number {
 function FileRow({ file, depth }: { file: TreeFile; depth: number }) {
   const router = useRouter()
   const renamePublicId = useContext(RenameContext)
+  const deletePublicId = useContext(DeleteContext)
   const [renaming, setRenaming] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [pending, startTransition] = useTransition()
   const name = file.displayName ?? file.filename
+
+  function remove() {
+    if (!deletePublicId) return
+    if (!window.confirm(`Delete "${name}" from disk? This cannot be undone.`)) return
+    setError(null)
+    startTransition(async () => {
+      const result = await deleteFile(deletePublicId, file.id)
+      if (!result.ok) {
+        setError(result.error)
+        return
+      }
+      router.refresh()
+    })
+  }
 
   function save(next: string) {
     if (!renamePublicId) return
@@ -231,9 +250,21 @@ function FileRow({ file, depth }: { file: TreeFile; depth: number }) {
         </>
       )}
 
-      {renaming && error && (
-        <p className="basis-full text-xs text-[var(--color-danger)]">{error}</p>
+      {deletePublicId && !renaming && (
+        <Button
+          variant="ghost"
+          size="icon"
+          className="shrink-0"
+          disabled={pending}
+          title={`Delete ${name}`}
+          aria-label={`Delete ${name}`}
+          onClick={remove}
+        >
+          <Trash2 />
+        </Button>
       )}
+
+      {error && <p className="basis-full text-xs text-[var(--color-danger)]">{error}</p>}
     </li>
   )
 }
@@ -297,12 +328,15 @@ export function FileSection({
   icon,
   files,
   renamePublicId = null,
+  deletePublicId = null,
 }: {
   title: ReactNode
   icon: ReactNode
   files: TreeFile[]
   /** Set when this viewer may rename the files, to the model they belong to. */
   renamePublicId?: string | null
+  /** Set when this viewer may delete single files, to the model they belong to. */
+  deletePublicId?: string | null
 }) {
   const [sort, setSort] = useState<FileSort>('default')
   return (
@@ -316,7 +350,9 @@ export function FileSection({
       />
       <Card className="overflow-hidden">
         <RenameContext.Provider value={renamePublicId}>
-          <FileTree files={files} sort={sort} />
+          <DeleteContext.Provider value={deletePublicId}>
+            <FileTree files={files} sort={sort} />
+          </DeleteContext.Provider>
         </RenameContext.Provider>
       </Card>
     </section>
