@@ -1,5 +1,5 @@
 import { readGcodeTools, scanUsedTools } from '../slicer/gcode-tools'
-import { colourDistance, materialFamily, type WantedFilament } from './loaded-filament'
+import { colourDistance, contradicts, materialFamily, type WantedFilament } from './loaded-filament'
 import {
   UPLOAD_TIMEOUT_MS,
   baseUrl,
@@ -201,7 +201,9 @@ function forRequest(
   paint: GcodePaint,
 ): { slot: number | null; sure: boolean } {
   if (wanted.spoolmanSpoolId != null) {
-    const exact = slots.find((slot) => slot.spoolmanSpoolId === wanted.spoolmanSpoolId)
+    const exact = slots.find(
+      (slot) => slot.spoolmanSpoolId === wanted.spoolmanSpoolId && !contradicts(wanted, slot),
+    )
     if (exact) return { slot: exact.index, sure: true }
   }
   if (wanted.material || wanted.colorHex) {

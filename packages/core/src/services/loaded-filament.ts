@@ -102,12 +102,38 @@ export function loadedFilament(
  */
 function findSlot(wanted: WantedFilament, loaded: FilamentSlot[]): FilamentSlot | null {
   if (wanted.spoolmanSpoolId != null) {
-    const exact = loaded.find((slot) => slot.spoolmanSpoolId === wanted.spoolmanSpoolId)
+    const exact = loaded.find(
+      (slot) => slot.spoolmanSpoolId === wanted.spoolmanSpoolId && !contradicts(wanted, slot),
+    )
     if (exact) return exact
     // The printer tracks spools and that one is not among them: no need to guess.
     if (loaded.some((slot) => slot.spoolmanSpoolId != null)) return null
   }
   return loaded.find((slot) => sameFilament(wanted, slot)) ?? null
+}
+
+/**
+ * Whether a slot plainly holds something else than what is wanted: another
+ * material family, or a colour far off. A slot's spool binding outlives the
+ * spool — swap white in where spool #14 (yellow) was and the bridge can still
+ * report #14 — so a spool id only counts while what the slot reports agrees.
+ */
+export function contradicts(
+  wanted: { material?: string | null; colorHex?: string | null },
+  slot: FilamentSlot,
+): boolean {
+  if (
+    wanted.material &&
+    slot.material &&
+    materialFamily(wanted.material) !== materialFamily(slot.material)
+  ) {
+    return true
+  }
+  return Boolean(
+    wanted.colorHex &&
+    slot.colorHex &&
+    colourDistance(wanted.colorHex, slot.colorHex) > SAME_COLOUR_DISTANCE,
+  )
 }
 
 function sameFilament(wanted: WantedFilament, slot: FilamentSlot): boolean {

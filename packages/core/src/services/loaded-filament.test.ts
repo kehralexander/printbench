@@ -38,6 +38,16 @@ describe('is the filament loaded', () => {
     expect(verdict?.loaded === false && verdict.instead.map((s) => s.index)).toEqual([0, 1, 3])
   })
 
+  it('does not trust a spool binding the slot contradicts', () => {
+    // The bridge still says spool 12 is in slot 0, but slot 0 reports white
+    // and spool 12 is yellow: the yellow spool was swapped out.
+    const verdict = loadedFilament(
+      { spoolmanSpoolId: 12, material: 'PLA', colorHex: '#f5e400' },
+      ace,
+    )
+    expect(verdict).toMatchObject({ loaded: false })
+  })
+
   it('matches material family and a close colour without a spool', () => {
     expect(
       loadedFilament({ spoolmanSpoolId: null, material: 'PETG', colorHex: '#000000' }, ace),
