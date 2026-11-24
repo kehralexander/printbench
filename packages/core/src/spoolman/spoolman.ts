@@ -50,9 +50,22 @@ export function spoolmanEnabled(): boolean {
   return spoolmanUrl() !== null
 }
 
+/**
+ * Where browsers reach Spoolman, for links. `SPOOLMAN_URL` is what the server
+ * fetches from and may be an address only it can resolve (a Kubernetes service
+ * or Compose container name); `SPOOLMAN_PUBLIC_URL` overrides it for people.
+ * Null when Spoolman is not configured.
+ */
+export function spoolmanPublicUrl(): string | null {
+  const base = spoolmanUrl()
+  if (!base) return null
+  const configured = process.env.SPOOLMAN_PUBLIC_URL?.trim().replace(/\/+$/, '')
+  return configured ? configured : base
+}
+
 /** Spoolman's own page for a spool, for "edit it there" links. */
 export function spoolmanSpoolLink(id: number): string | null {
-  const base = spoolmanUrl()
+  const base = spoolmanPublicUrl()
   return base ? `${base}/spool/show/${id}` : null
 }
 

@@ -199,6 +199,22 @@ what each error message means.
 
 ---
 
+## Spoolman
+
+Set `SPOOLMAN_URL` and Spoolman becomes the filament inventory (read-only from
+PrintBench). The server fetches from that address, so point it at the internal
+one when Spoolman runs alongside PrintBench: a Compose container name such as
+`http://spoolman:8000`, or a Kubernetes service such as
+`http://spoolman.spoolman.svc.cluster.local`. That skips the reverse proxy and
+external DNS, a common source of intermittent "Spoolman could not be reached"
+errors.
+
+Browsers can't resolve such names, so set `SPOOLMAN_PUBLIC_URL` to the address
+people use (`https://spoolman.example.com`). The "open in Spoolman" links use it;
+without it they fall back to `SPOOLMAN_URL`.
+
+---
+
 ## Backups
 
 ### The whole instance, from the UI

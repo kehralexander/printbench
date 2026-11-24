@@ -5,7 +5,7 @@ import {
   listFilaments,
   listSpoolmanSpools,
   listSpools,
-  spoolmanUrl,
+  spoolmanPublicUrl,
 } from '@pb/core'
 import { getDb } from '@pb/db'
 import { NotPermitted } from '@/components/shell/not-permitted'
@@ -25,7 +25,7 @@ export default async function FilamentsPage({
   if (!can(user, 'filament:view')) return <NotPermitted what="the filament library" />
 
   // With Spoolman configured it owns the inventory, and this page only shows it.
-  const spoolman = spoolmanUrl()
+  const spoolman = spoolmanPublicUrl()
   if (spoolman) {
     // This page is where people look after weighing a spool, so it is always current.
     clearSpoolmanCache()

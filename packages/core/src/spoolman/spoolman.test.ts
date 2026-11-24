@@ -3,6 +3,7 @@ import {
   clearSpoolmanCache,
   listSpoolmanSpools,
   spoolmanEnabled,
+  spoolmanPublicUrl,
   spoolmanSpoolLink,
 } from './spoolman'
 
@@ -126,5 +127,33 @@ describe('Spoolman client', () => {
 
   it('links to the spool in Spoolman', () => {
     expect(spoolmanSpoolLink(17)).toBe('https://spoolman.example.test/spool/show/17')
+  })
+
+  it('links through SPOOLMAN_PUBLIC_URL while fetching from SPOOLMAN_URL', async () => {
+    process.env.SPOOLMAN_URL = 'http://spoolman.spoolman.svc.cluster.local'
+    process.env.SPOOLMAN_PUBLIC_URL = 'https://spoolman.example.test/'
+    try {
+      expect(spoolmanPublicUrl()).toBe('https://spoolman.example.test')
+      expect(spoolmanSpoolLink(17)).toBe('https://spoolman.example.test/spool/show/17')
+      const fetch = respond([])
+      await listSpoolmanSpools({ fetch })
+      expect(fetch).toHaveBeenCalledWith(
+        'http://spoolman.spoolman.svc.cluster.local/api/v1/spool?allow_archived=true',
+        expect.anything(),
+      )
+    } finally {
+      delete process.env.SPOOLMAN_PUBLIC_URL
+    }
+  })
+
+  it('needs SPOOLMAN_URL for SPOOLMAN_PUBLIC_URL to mean anything', () => {
+    delete process.env.SPOOLMAN_URL
+    process.env.SPOOLMAN_PUBLIC_URL = 'https://spoolman.example.test'
+    try {
+      expect(spoolmanPublicUrl()).toBeNull()
+      expect(spoolmanSpoolLink(17)).toBeNull()
+    } finally {
+      delete process.env.SPOOLMAN_PUBLIC_URL
+    }
   })
 })
