@@ -94,9 +94,29 @@ async function fetchSpools(base: string, fetcher: typeof fetch): Promise<Spoolma
       error instanceof Error && error.name === 'TimeoutError'
         ? 'Spoolman did not answer in time.'
         : 'Spoolman could not be reached.'
-    console.warn(`[spoolman] ${reason} ${error instanceof Error ? error.message : ''}`)
+    console.warn(`[spoolman] ${reason} ${describeError(error)}`)
     return { ok: false, error: reason }
   }
+}
+
+/**
+ * Node's fetch throws a bare "fetch failed" and keeps the network error
+ * (ECONNREFUSED, ECONNRESET, ENOTFOUND, ...) on `cause`; walk the chain.
+ */
+function describeError(error: unknown): string {
+  const parts: string[] = []
+  let current: unknown = error
+  for (let depth = 0; current && depth < 4; depth++) {
+    if (current instanceof Error) {
+      const code = (current as { code?: unknown }).code
+      parts.push(typeof code === 'string' ? `${current.message} (${code})` : current.message)
+      current = current.cause
+    } else {
+      parts.push(String(current))
+      break
+    }
+  }
+  return parts.join(' <- ')
 }
 
 type Json = Record<string, unknown>

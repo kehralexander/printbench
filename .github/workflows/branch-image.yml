@@ -1,0 +1,82 @@
+# Publish a test image for every pushed branch, so a fix can run on a real
+# deployment before it is released. Tags never collide with releases:
+#   ghcr.io/<owner>/printbench:branch-<branch>   (moves with the branch)
+#   ghcr.io/<owner>/printbench:sha-<short sha>   (pinned to one commit)
+# Only the app image is built; use the released nginx image alongside it.
+# These images skip CI. Release images still come from release.yml only.
+name: Branch image
+
+on:
+  push:
+    branches-ignore: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: branch-image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Image tags
+        id: meta
+        env:
+          REPOSITORY: ${{ github.repository }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          image="ghcr.io/${REPOSITORY,,}"
+          # Docker tags allow [A-Za-z0-9_.-], at most 128 characters.
+          slug=$(printf '%s' "$BRANCH" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9_.-]+/-/g; s/^-+|-+$//g' | cut -c1-100)
+          {
+            echo 'tags<<TAGS'
+            echo "$image:branch-$slug"
+            echo "$image:sha-${GITHUB_SHA::7}"
+            echo 'TAGS'
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-qemu-action@v4
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/Dockerfile
+          push: true
+          platforms: linux/amd64,linux/arm64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: |
+            org.opencontainers.image.title=PrintBench
+            org.opencontainers.image.version=branch-${{ github.ref_name }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.licenses=MIT
+
+      - name: Summary
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          {
+            echo '### Published'
+            echo
+            while read -r tag; do echo "- \`$tag\`"; done <<< "$TAGS"
+          } >> "$GITHUB_STEP_SUMMARY"
