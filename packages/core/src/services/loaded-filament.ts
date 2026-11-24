@@ -52,6 +52,14 @@ export interface WantedFilament {
  */
 const SAME_COLOUR_DISTANCE = 80
 
+/**
+ * How far off a slot's colour must be before it outweighs the spool bound to
+ * it. Printers report a colour from their own palette, not the spool's: teal
+ * #74cdc7 comes back as #23a3c7 (~91 apart), while a wrong spool — yellow in a
+ * white slot — is ~250 apart. Between the two lies "the printer rounded it".
+ */
+const CONTRADICTING_COLOUR_DISTANCE = 160
+
 /** Whether a filament row asks for anything at all; an empty one is "any". */
 export function namesFilament(wanted: WantedFilament): boolean {
   return wanted.spoolmanSpoolId != null || Boolean(wanted.material) || Boolean(wanted.colorHex)
@@ -114,7 +122,8 @@ function findSlot(wanted: WantedFilament, loaded: FilamentSlot[]): FilamentSlot 
 
 /**
  * Whether a slot plainly holds something else than what is wanted: another
- * material family, or a colour far off. A slot's spool binding outlives the
+ * material family, or a colour far off — further than a printer's palette
+ * would round it. A slot's spool binding outlives the
  * spool — swap white in where spool #14 (yellow) was and the bridge can still
  * report #14 — so a spool id only counts while what the slot reports agrees.
  */
@@ -132,7 +141,7 @@ export function contradicts(
   return Boolean(
     wanted.colorHex &&
     slot.colorHex &&
-    colourDistance(wanted.colorHex, slot.colorHex) > SAME_COLOUR_DISTANCE,
+    colourDistance(wanted.colorHex, slot.colorHex) > CONTRADICTING_COLOUR_DISTANCE,
   )
 }
 

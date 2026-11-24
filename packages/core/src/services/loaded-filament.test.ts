@@ -48,6 +48,19 @@ describe('is the filament loaded', () => {
     expect(verdict).toMatchObject({ loaded: false })
   })
 
+  it('trusts a spool binding when the printer only rounded its colour', () => {
+    // Elegoo Matte Teal Green #74cdc7, reported by the Kobra X as #23a3c7.
+    const printers = [
+      {
+        printerName: 'Kobra X',
+        slots: [slot(2, { material: 'PLA Matte', colorHex: '#23a3c7', spoolmanSpoolId: 87 })],
+      },
+    ]
+    expect(
+      loadedFilament({ spoolmanSpoolId: 87, material: 'PLA', colorHex: '#74cdc7' }, printers),
+    ).toMatchObject({ loaded: true, slot: { index: 2 } })
+  })
+
   it('matches material family and a close colour without a spool', () => {
     expect(
       loadedFilament({ spoolmanSpoolId: null, material: 'PETG', colorHex: '#000000' }, ace),
