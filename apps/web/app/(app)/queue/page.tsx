@@ -27,6 +27,7 @@ import {
 import { getSessionUser } from '@pb/auth'
 import { getDb } from '@pb/db'
 import { filamentOptions } from '@/lib/filament-options'
+import { spoolLoadTarget } from '@/lib/load-target'
 import { NotPermitted } from '@/components/shell/not-permitted'
 import { NextUpHint } from '@/components/printer/next-up-hint'
 import { Button } from '@/components/ui/button'
@@ -272,7 +273,8 @@ export default async function QueuePage({
   // Idle printers whose next print no queue row already announces: nothing
   // loaded matches, or the most urgent request needs a different filament.
   const idleNotes = canRun ? hints.filter((hint) => !hint.ready || hint.swap) : []
-  const context: RowContext = { canRun, filaments, billing, sendTargets }
+  const loadTarget = canRun ? await spoolLoadTarget(db, policyUser) : null
+  const context: RowContext = { canRun, filaments, billing, sendTargets, loadTarget }
   // "for Alexander" on every row says nothing when every row is for Alexander.
   const showRequester =
     new Set(rows.map((row) => row.requestedBy?.trim().toLowerCase() ?? '')).size > 1

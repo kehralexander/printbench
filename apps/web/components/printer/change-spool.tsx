@@ -2,7 +2,7 @@
 
 import { useMemo, useState, useTransition } from 'react'
 import { AlertTriangle, Check, Loader2, RefreshCw, X } from 'lucide-react'
-import type { StepOutcome } from '@pb/core'
+import type { FilamentSlot, StepOutcome } from '@pb/core'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogTrigger } from '@/components/ui/dialog'
@@ -11,7 +11,19 @@ import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { Swatch } from '@/components/ui/swatch'
 import { cn } from '@/lib/cn'
-import { changeSlotSpool, loadSpoolChoices, type SpoolChoices, type SpoolOption } from './actions'
+import {
+  changeSlotSpool,
+  loadSpoolChoices,
+  type SpoolChoices,
+  type SpoolOption,
+} from '@/app/(app)/printers/actions'
+
+/** A KX-Bridge printer a spool can be loaded into, with what it has loaded. */
+export interface LoadTarget {
+  hostId: string
+  printerName: string
+  slots: FilamentSlot[]
+}
 
 /** "Empty" in the picker: the slot is left without a spool. */
 const NONE = 'none'
@@ -19,17 +31,33 @@ const NONE = 'none'
 /**
  * Swapping the spool in one slot: pick what goes in, say where the one coming
  * out goes, and watch each system take it — printer, bridge, Spoolman.
+ *
+ * Opened from a slot, it asks for the spool; opened from a spool (the queue's
+ * "not loaded", a spool in the inventory), it asks for the slot first and
+ * comes with that spool picked.
  */
 export function ChangeSpool({
   hostId,
   slotIndex,
+  slots = [],
+  spoolId,
   printerName,
+  label = 'Change',
+  className,
 }: {
   hostId: string
-  slotIndex: number
+  /** The slot to change; omit to ask, from `slots`. */
+  slotIndex?: number
+  /** What the printer has loaded, to choose a slot from. */
+  slots?: FilamentSlot[]
+  /** The spool to put in, picked when the dialog opens. */
+  spoolId?: number
   printerName: string
+  label?: string
+  className?: string
 }) {
   const [open, setOpen] = useState(false)
+  const [slot, setSlot] = useState<number | null>(slotIndex ?? null)
   const [choices, setChoices] = useState<SpoolChoices | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [picked, setPicked] = useState<number | typeof NONE | null>(null)
@@ -40,6 +68,7 @@ export function ChangeSpool({
   const [pending, startTransition] = useTransition()
 
   const reset = () => {
+    setSlot(slotIndex ?? null)
     setChoices(null)
     setError(null)
     setPicked(null)
@@ -48,21 +77,26 @@ export function ChangeSpool({
     setDone(null)
   }
 
-  const load = () =>
+  const load = (index: number) =>
     startTransition(async () => {
-      const result = await loadSpoolChoices(hostId, slotIndex)
+      setSlot(index)
+      const result = await loadSpoolChoices(hostId, index)
       if (!result.ok) return setError(result.error)
       setChoices(result.choices)
       setShelf(result.choices.returnLocation)
+      if (spoolId != null && result.choices.spools.some((spool) => spool.id === spoolId)) {
+        setPicked(spoolId)
+      }
     })
 
   const submit = () =>
     startTransition(async () => {
       setError(null)
       setDone(null)
+      if (slot == null) return
       const result = await changeSlotSpool(
         hostId,
-        slotIndex,
+        slot,
         picked === NONE ? null : (picked as number),
         shelf,
       )
@@ -92,25 +126,72 @@ export function ChangeSpool({
         setOpen(next)
         if (next) {
           reset()
-          load()
+          if (slotIndex != null) load(slotIndex)
         }
       }}
     >
       <DialogTrigger asChild>
         <button
           type="button"
-          className="text-[var(--color-accent)] hover:underline"
-          aria-label={`Change the spool in slot ${slotIndex + 1}`}
+          className={cn('text-[var(--color-accent)] hover:underline', className)}
+          aria-label={
+            slotIndex != null
+              ? `Change the spool in slot ${slotIndex + 1}`
+              : spoolId != null
+                ? `Load spool #${spoolId} into ${printerName}`
+                : undefined
+          }
         >
-          Change
+          {label}
         </button>
       </DialogTrigger>
       <DialogContent
-        title={`Change spool · slot ${slotIndex + 1}`}
+        title={
+          slot != null
+            ? `Change spool · slot ${slot + 1}`
+            : spoolId != null
+              ? `Load spool #${spoolId}`
+              : 'Change spool'
+        }
         description={`${printerName}, its KX-Bridge and Spoolman are all updated.`}
         hideClose={pending}
       >
-        {!choices && !error && (
+        {slot == null && (
+          <div className="space-y-2">
+            <p className="text-sm">Into which slot?</p>
+            <ul className="grid grid-cols-2 gap-1.5">
+              {slots.map((candidate) => (
+                <li key={candidate.index}>
+                  <button
+                    type="button"
+                    onClick={() => load(candidate.index)}
+                    className="flex w-full items-center gap-2 rounded-[var(--radius-control)] border border-[var(--color-border)] px-2 py-1.5 text-left text-sm hover:bg-[var(--color-surface-2)]"
+                  >
+                    <Swatch
+                      color={candidate.loaded ? candidate.colorHex : null}
+                      className="size-4"
+                    />
+                    <span className="min-w-0">
+                      <span className="block font-medium">Slot {candidate.index + 1}</span>
+                      <span className="block truncate text-xs text-[var(--color-ink-muted)]">
+                        {!candidate.loaded
+                          ? 'Empty'
+                          : [
+                              candidate.material,
+                              candidate.spoolmanSpoolId != null && `#${candidate.spoolmanSpoolId}`,
+                            ]
+                              .filter(Boolean)
+                              .join(' · ') || 'Loaded'}
+                      </span>
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {slot != null && !choices && !error && (
           <p className="flex items-center gap-2 text-sm text-[var(--color-ink-muted)]">
             <Loader2 className="size-4 animate-spin" /> Reading the slot and Spoolman…
           </p>

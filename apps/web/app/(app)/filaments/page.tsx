@@ -10,6 +10,7 @@ import {
 import { getDb } from '@pb/db'
 import { NotPermitted } from '@/components/shell/not-permitted'
 import { PageHeader } from '@/components/shell/page-header'
+import { spoolLoadTarget } from '@/lib/load-target'
 import { pickSort } from '@/lib/sort'
 import { FilamentLibrary } from './library'
 import { SPOOLMAN_SORTS } from './sort'
@@ -29,7 +30,11 @@ export default async function FilamentsPage({
   if (spoolman) {
     // This page is where people look after weighing a spool, so it is always current.
     clearSpoolmanCache()
-    const [result, params] = await Promise.all([listSpoolmanSpools(), searchParams])
+    const [result, params, loadTarget] = await Promise.all([
+      listSpoolmanSpools(),
+      searchParams,
+      spoolLoadTarget(getDb(), user),
+    ])
     return (
       <>
         <PageHeader
@@ -41,6 +46,7 @@ export default async function FilamentsPage({
           baseUrl={spoolman}
           showArchived={params.archived === '1'}
           sort={pickSort(params.sort, SPOOLMAN_SORTS, 'name')}
+          loadTarget={loadTarget}
         />
       </>
     )

@@ -41,6 +41,7 @@ import { cn } from '@/lib/cn'
 import { formatDate } from '@/lib/format'
 import type { FilamentOption } from '@/lib/filament-options'
 import { ClockTime } from '@/components/ui/clock-time'
+import { ChangeSpool, type LoadTarget } from '@/components/printer/change-spool'
 import { partName, partNameFromFile } from './grouping'
 import { LinkPicker } from './link-picker'
 import { RequestEditor } from './request-editor'
@@ -262,6 +263,8 @@ export interface RowContext {
   billing: QueueBilling | null
   /** Printers to offer Send & start for; empty when the user may not send. */
   sendTargets: SendTarget[]
+  /** Where a missing spool can be loaded; null when the user may not, or nowhere. */
+  loadTarget: LoadTarget | null
 }
 
 /**
@@ -650,11 +653,14 @@ function StateBadges({
 export function FilamentLine({
   request,
   showPrinter = true,
+  load = null,
   className,
 }: {
   request: QueueRow
   /** Off where the printer is obvious, such as inside its own card. */
   showPrinter?: boolean
+  /** Offer to load a missing spool into this printer. */
+  load?: LoadTarget | null
   className?: string
 }) {
   const { named, look, closed } = describeRequest(request)
@@ -716,6 +722,19 @@ export function FilamentLine({
               )
             </span>
           )}
+          {load &&
+            [...new Set(verdict.missing.map((f) => f.spoolmanSpoolId))]
+              .filter((id): id is number => id != null)
+              .map((id) => (
+                <ChangeSpool
+                  key={id}
+                  hostId={load.hostId}
+                  printerName={load.printerName}
+                  slots={load.slots}
+                  spoolId={id}
+                  label={`Load #${id}`}
+                />
+              ))}
         </span>
       )}
     </span>
@@ -915,7 +934,7 @@ export function RequestRow({
           )}
         </p>
 
-        {!closed && <FilamentLine request={request} className="mt-1" />}
+        {!closed && <FilamentLine request={request} load={context.loadTarget} className="mt-1" />}
         <SpoolNotes request={request} />
         <OnPrinterNote request={request} left={left} />
         <NextOnNote request={request} />
@@ -1033,7 +1052,7 @@ export function RequestPart({
             {!context.billing && ' · ↑ printing now'}
           </span>
         ) : (
-          !closed && <FilamentLine request={request} />
+          !closed && <FilamentLine request={request} load={context.loadTarget} />
         )}
       </span>
       <span className="ml-11 w-16 shrink-0 text-right tabular-nums text-[var(--color-ink-muted)] md:ml-0">

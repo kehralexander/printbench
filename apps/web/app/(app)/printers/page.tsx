@@ -41,7 +41,7 @@ import {
 } from '@/components/printer/printer-state'
 import { readPrintersLive } from '@/lib/printer-live'
 import { pickSort } from '@/lib/sort'
-import { ChangeSpool } from './change-spool'
+import { ChangeSpool } from '@/components/printer/change-spool'
 
 export const dynamic = 'force-dynamic'
 export const metadata = { title: 'Printer status' }

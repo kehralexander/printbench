@@ -7,6 +7,7 @@ import {
   type SpoolmanResult,
   type SpoolmanSpool,
 } from '@pb/core'
+import { ChangeSpool, type LoadTarget } from '@/components/printer/change-spool'
 import { Badge } from '@/components/ui/badge'
 import { Swatch } from '@/components/ui/swatch'
 import { Button } from '@/components/ui/button'
@@ -29,11 +30,14 @@ export function SpoolmanInventory({
   baseUrl,
   showArchived,
   sort,
+  loadTarget = null,
 }: {
   result: SpoolmanResult
   baseUrl: string
   showArchived: boolean
   sort: SpoolmanSort
+  /** The printer a spool can be loaded into from here. */
+  loadTarget?: LoadTarget | null
 }) {
   if (!result.ok) {
     return (
@@ -145,7 +149,7 @@ export function SpoolmanInventory({
                 </div>
                 <ul className="divide-y divide-[var(--color-border)]">
                   {group.map((spool) => (
-                    <SpoolRow key={spool.id} spool={spool} />
+                    <SpoolRow key={spool.id} spool={spool} loadTarget={loadTarget} />
                   ))}
                 </ul>
               </Card>
@@ -157,7 +161,7 @@ export function SpoolmanInventory({
   )
 }
 
-function SpoolRow({ spool }: { spool: SpoolmanSpool }) {
+function SpoolRow({ spool, loadTarget }: { spool: SpoolmanSpool; loadTarget: LoadTarget | null }) {
   const remaining = spool.remainingG
   const fraction = remaining != null && spool.initialG ? remaining / spool.initialG : null
   const state =
@@ -169,6 +173,8 @@ function SpoolRow({ spool }: { spool: SpoolmanSpool }) {
           ? { label: 'Low', tone: 'warning' as const }
           : null
   const link = spoolmanSpoolLink(spool.id)
+  const inSlot = loadTarget?.slots.find((slot) => slot.spoolmanSpoolId === spool.id)
+  const loadable = loadTarget && !spool.archived && (remaining == null || remaining > 0)
 
   return (
     <li className={spool.archived ? 'space-y-2 px-4 py-3 opacity-60' : 'space-y-2 px-4 py-3'}>
@@ -177,6 +183,16 @@ function SpoolRow({ spool }: { spool: SpoolmanSpool }) {
         {spool.location && <span className="text-[var(--color-ink-muted)]">{spool.location}</span>}
         {spool.archived && <Badge tone="neutral">Archived</Badge>}
         {state && <Badge tone={state.tone}>{state.label}</Badge>}
+        {inSlot && <span className="text-[var(--color-ink-muted)]">slot {inSlot.index + 1}</span>}
+        {loadable && !inSlot && (
+          <ChangeSpool
+            hostId={loadTarget.hostId}
+            printerName={loadTarget.printerName}
+            slots={loadTarget.slots}
+            spoolId={spool.id}
+            label={`Load into ${loadTarget.printerName}`}
+          />
+        )}
         <span className="ml-auto tabular-nums text-[var(--color-ink-muted)]">
           {remaining != null ? `${Math.round(remaining).toLocaleString()} g` : 'Unknown'}
           {spool.initialG ? ` of ${Math.round(spool.initialG).toLocaleString()} g` : ''}
