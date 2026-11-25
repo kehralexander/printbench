@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useTransition, type DragEvent, type ReactNode } from 'react'
+import { useRef, useState, useTransition, type DragEvent, type ReactNode } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import {
@@ -310,9 +310,14 @@ export function RequestActions({
   const [linking, setLinking] = useState(false)
   const [sending, setSending] = useState(false)
   const [sharing, setSharing] = useState(false)
-  // Once the menu has closed and handed focus back, or the panel it opens
-  // would close again straight away.
-  const after = (open: () => void) => () => setTimeout(open, 0)
+  // Opened once the menu has gone. The menu must also not hand focus back to
+  // its button as it closes: that lands a tick after the panel has opened, and
+  // a popover anchored there takes focus moving outside it as a cue to close.
+  const panelOpening = useRef(false)
+  const after = (open: () => void) => () => {
+    panelOpening.current = true
+    setTimeout(open, 0)
+  }
 
   const markPrinted = () => run(() => setStatus(request.id, 'done'))
   const printedTitle = request.modelPublicId
@@ -408,7 +413,12 @@ export function RequestActions({
                 <MoreHorizontal />
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent>
+            <DropdownMenuContent
+              onCloseAutoFocus={(event) => {
+                if (panelOpening.current) event.preventDefault()
+                panelOpening.current = false
+              }}
+            >
               {!closed && canRun && (
                 <>
                   {canSend && !buttonSends && (
