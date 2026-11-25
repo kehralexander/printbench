@@ -4,7 +4,8 @@
  * When `SPOOLMAN_URL` is set, Spoolman owns spools, stock and usage, and
  * PrintBench's own inventory is switched off. Something else — a printer
  * bridge, Moonraker, Home Assistant — reports usage to Spoolman, so this side
- * only ever reads: a second writer would deduct every print twice.
+ * never writes usage: a second writer would deduct every print twice. The one
+ * thing it writes is where a spool is, when a spool change moves it.
  *
  * Reads are cached briefly and fail soft. Spoolman being down costs a picker
  * its spool list and the queue its spool badges, never a page.
@@ -178,6 +179,58 @@ function color(value: unknown): string | null {
   if (typeof value !== 'string') return null
   const hex = value.trim().replace(/^#/, '')
   return /^[0-9a-f]{6}([0-9a-f]{2})?$/i.test(hex) ? `#${hex.slice(0, 6).toLowerCase()}` : null
+}
+
+export type SpoolmanWrite = { ok: true } | { ok: false; error: string }
+
+/**
+ * Moves a spool to a location — "Kobra X" when it goes into that printer,
+ * back to the shelf when it comes out. Spoolman creates a location the first
+ * time a spool names it.
+ */
+export async function setSpoolmanLocation(
+  id: number,
+  location: string | null,
+  options: { fetch?: typeof fetch } = {},
+): Promise<SpoolmanWrite> {
+  const base = spoolmanUrl()
+  if (!base) return { ok: false, error: 'Spoolman is not configured.' }
+  try {
+    const response = await (options.fetch ?? fetch)(`${base}/api/v1/spool/${id}`, {
+      method: 'PATCH',
+      headers: { accept: 'application/json', 'content-type': 'application/json' },
+      body: JSON.stringify({ location: location ?? '' }),
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    })
+    if (response.status === 404) return { ok: false, error: `Spoolman has no spool #${id}.` }
+    if (!response.ok) return { ok: false, error: `Spoolman answered ${response.status}.` }
+    // The list is stale now; the next read should show the move.
+    cache = null
+    return { ok: true }
+  } catch (error) {
+    console.warn(`[spoolman] Could not move spool #${id}. ${describeError(error)}`)
+    return { ok: false, error: 'Spoolman could not be reached.' }
+  }
+}
+
+/** The locations spools are kept in, for "where does it go" pickers. */
+export async function listSpoolmanLocations(
+  options: { fetch?: typeof fetch } = {},
+): Promise<string[]> {
+  const base = spoolmanUrl()
+  if (!base) return []
+  try {
+    const response = await (options.fetch ?? fetch)(`${base}/api/v1/location`, {
+      headers: { accept: 'application/json' },
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+      cache: 'no-store',
+    })
+    if (!response.ok) return []
+    const body: unknown = await response.json()
+    return Array.isArray(body) ? body.map(text).filter((l): l is string => l !== null) : []
+  } catch {
+    return []
+  }
 }
 
 /** "Matte Navy Blue" with its vendor and material, for lists and labels. */

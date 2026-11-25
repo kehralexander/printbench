@@ -5,7 +5,10 @@ import { Printer, Settings2 } from 'lucide-react'
 import { getSessionUser } from '@pb/auth'
 import {
   can,
+  contradicts,
   countUnmatchedJobs,
+  listSpoolmanSpools,
+  spoolmanEnabled,
   listRequests,
   getSettings,
   heldForRequester,
@@ -15,6 +18,7 @@ import {
   type FilamentSlot,
   type LoadNextHint,
   type PrinterStatus,
+  type SpoolmanSpool,
 } from '@pb/core'
 import { getDb, schema } from '@pb/db'
 import { PageHeader } from '@/components/shell/page-header'
@@ -37,6 +41,7 @@ import {
 } from '@/components/printer/printer-state'
 import { readPrintersLive } from '@/lib/printer-live'
 import { pickSort } from '@/lib/sort'
+import { ChangeSpool } from './change-spool'
 
 export const dynamic = 'force-dynamic'
 export const metadata = { title: 'Printer status' }
@@ -72,6 +77,8 @@ export default async function PrintersPage({
 
   const sort = pickSort((await searchParams).sort, PRINTER_SORTS, 'name')
   const canManage = can(user, 'printhost:manage')
+  // Changing spools writes to the printer, as sending a print does.
+  const canChangeSpools = can(user, 'printhost:send') && spoolmanEnabled()
   const db = getDb()
   const hosts = await db.select().from(schema.printHosts).orderBy(schema.printHosts.name)
 
@@ -98,13 +105,15 @@ export default async function PrintersPage({
   const readings = await readPrintersLive(hosts)
   const statuses = readings.map((reading) => reading.status)
 
-  const [files, jobRequests, unmatched] = await Promise.all([
+  const [files, jobRequests, unmatched, spoolList] = await Promise.all([
     Promise.all(
       statuses.map((status) => (status.filename ? findPrintedFile(status.filename) : null)),
     ),
     openJobRequests(),
     countUnmatchedJobs(db),
+    spoolmanEnabled() ? listSpoolmanSpools() : null,
   ])
+  const spools = new Map(spoolList?.ok ? spoolList.spools.map((spool) => [spool.id, spool]) : [])
   const doneAt = readings.map(({ status, readAt }) => printDoneAt(status, readAt))
 
   // For idle printers, what in the queue they could start next.
@@ -171,7 +180,10 @@ export default async function PrintersPage({
           return (
             <PrinterCard
               key={host.id}
+              hostId={host.id}
               name={host.name}
+              canChangeSpools={canChangeSpools && host.protocol === 'kx-bridge'}
+              spools={spools}
               status={statuses[index]!}
               file={files[index] ?? null}
               request={statuses[index]!.busy ? (jobRequests.get(host.id) ?? null) : null}
@@ -214,7 +226,10 @@ async function openJobRequests(): Promise<Map<string, JobRequest>> {
 }
 
 function PrinterCard({
+  hostId,
   name,
+  canChangeSpools,
+  spools,
   status,
   file,
   request,
@@ -222,7 +237,11 @@ function PrinterCard({
   ageSec,
   hint,
 }: {
+  hostId: string
   name: string
+  /** A KX-Bridge printer, Spoolman configured, and someone allowed to. */
+  canChangeSpools: boolean
+  spools: Map<number, SpoolmanSpool>
   status: PrinterStatus
   file: PrintedFile | null
   request: JobRequest | null
@@ -313,7 +332,18 @@ function PrinterCard({
 
       {hint && <NextUpHint hint={hint} />}
 
-      {status.slots && status.slots.length > 0 && <Slots slots={status.slots} />}
+      {status.slots && status.slots.length > 0 && (
+        <Slots
+          slots={status.slots}
+          spools={spools}
+          change={
+            // Rebinding mid-print would lose the print's usage in the bridge.
+            canChangeSpools && !status.busy && status.state !== 'offline'
+              ? { hostId, printerName: name }
+              : null
+          }
+        />
+      )}
 
       {(status.nozzle || status.bed) && (
         <p className="text-xs text-[var(--color-ink-muted)]">
@@ -333,11 +363,22 @@ function temperature({ actual, target }: { actual: number; target: number }): st
 }
 
 /** The filament in a multi-material unit, slot by slot, the active one marked. */
-function Slots({ slots }: { slots: FilamentSlot[] }) {
+function Slots({
+  slots,
+  spools,
+  change,
+}: {
+  slots: FilamentSlot[]
+  spools: Map<number, SpoolmanSpool>
+  change: { hostId: string; printerName: string } | null
+}) {
   return (
     <ul className="grid grid-cols-2 gap-2 sm:grid-cols-4" aria-label="Loaded filament">
       {slots.map((slot) => {
         const link = slot.spoolmanSpoolId != null ? spoolmanSpoolLink(slot.spoolmanSpoolId) : null
+        const bound = slot.spoolmanSpoolId != null ? spools.get(slot.spoolmanSpoolId) : undefined
+        // The binding outlived a swap: the slot holds something else than its spool.
+        const stale = slot.loaded && bound != null && contradicts(bound, slot)
         return (
           <li
             key={slot.index}
@@ -369,6 +410,23 @@ function Slots({ slots }: { slots: FilamentSlot[] }) {
                   (slot.material ?? 'Loaded')
                 )}
               </span>
+              {stale && (
+                <span
+                  className="block truncate text-[var(--color-danger)]"
+                  title={`Spool #${bound.id} is ${bound.colorHex ?? bound.material}, the slot reports ${slot.colorHex ?? slot.material}.`}
+                >
+                  Not spool #{bound.id}?
+                </span>
+              )}
+              {change && (
+                <span className="block">
+                  <ChangeSpool
+                    hostId={change.hostId}
+                    slotIndex={slot.index}
+                    printerName={change.printerName}
+                  />
+                </span>
+              )}
             </span>
           </li>
         )

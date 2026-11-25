@@ -88,6 +88,7 @@ export const AUDIT_ACTIONS = {
   'printer.created': 'Added a printer',
   'printer.updated': 'Changed a printer',
   'printer.deleted': 'Removed a printer',
+  'printer.spool_changed': 'Changed a spool in a printer',
 
   'settings.updated': 'Changed settings',
   'settings.reset': 'Reset a setting',

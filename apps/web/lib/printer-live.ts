@@ -91,3 +91,8 @@ async function read(host: Host): Promise<LiveReading> {
   }
   return { status, readAt }
 }
+
+/** Drops a printer's shared reading, after something changed it from here. */
+export function forgetPrinterLive(hostId: string): void {
+  cache.delete(hostId)
+}
