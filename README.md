@@ -32,7 +32,7 @@ This is a fork of [PrintBench/printbench](https://github.com/PrintBench/printben
 - **A print queue that follows the printers.** The worker watches Moonraker, OctoPrint, PrusaLink and KX-Bridge printers, moves requests along as their files start and finish, and can send and start a request on a free printer. The queue can be dragged into order and shows print-time estimates.
 - **Live printer status** on the dashboard and its own page, with progress, times, temperatures and the filament loaded in each slot.
 - **Automatic print history.** Finished, cancelled and failed jobs are logged with real times, can be rated with a photo, and feed success rates per model, file and material.
-- **Spoolman as the filament inventory**, with low-spool warnings in the queue.
+- **Spoolman as the filament inventory**, with low-spool warnings in the queue, and a slot's spool changed on the printer, KX-Bridge and Spoolman in one step.
 - **Multi-filament requests**, with a colour and spool per tool read from the G-code, checked against what each printer has loaded.
 - **Pricing and billing**: cost per print from filament, power, machine time and failure rate; tiered prices; quotes requesters accept on their status page; payments, customer balances and PDF invoices.
 - **Status links for requesters**: a page and QR code that needs no account and shows a request's place in the queue and its print as it happens.
@@ -41,7 +41,7 @@ This is a fork of [PrintBench/printbench](https://github.com/PrintBench/printben
 - **A model page built around printing**: a strip of sliced plates to pick and send, mesh files grouped into parts with their variants, and the picture and 3D view in a rail that follows the picked file.
 - **G-code previews**, adding, renaming and deleting files in an existing model, choosing its thumbnail, and a consistent design across every page.
 
-See the [release notes](docs/releases/v0.13.0.md) for the details and upgrade notes.
+See the [release notes](docs/releases/v0.14.0.md) for the details and upgrade notes.
 
 ## Features
 

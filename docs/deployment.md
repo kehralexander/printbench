@@ -201,8 +201,9 @@ what each error message means.
 
 ## Spoolman
 
-Set `SPOOLMAN_URL` and Spoolman becomes the filament inventory (read-only from
-PrintBench). The server fetches from that address, so point it at the internal
+Set `SPOOLMAN_URL` and Spoolman becomes the filament inventory. PrintBench
+only writes to it when a KX-Bridge slot's spool is changed, and then only the
+spools' locations (`PATCH /api/v1/spool/<id>`). The server fetches from that address, so point it at the internal
 one when Spoolman runs alongside PrintBench: a Compose container name such as
 `http://spoolman:8000`, or a Kubernetes service such as
 `http://spoolman.spoolman.svc.cluster.local`. That skips the reverse proxy and
